@@ -1,0 +1,80 @@
+[
+  {
+    "exp_id": "Exp A",
+    "configuration": "XGBoost Only",
+    "precision": 100.0,
+    "recall": 100.0,
+    "f1_score": 100.0,
+    "roc_auc": 100.0,
+    "pr_auc": 100.0,
+    "false_alarm_rate_pct": 0.0,
+    "latency_ms": 0.0,
+    "safety_compliance_pct": 100.0,
+    "safety_violations": 0
+  },
+  {
+    "exp_id": "Exp B",
+    "configuration": "Random Forest + XGBoost",
+    "precision": 100.0,
+    "recall": 100.0,
+    "f1_score": 100.0,
+    "roc_auc": 100.0,
+    "pr_auc": 100.0,
+    "false_alarm_rate_pct": 0.0,
+    "latency_ms": 0.0,
+    "safety_compliance_pct": 100.0,
+    "safety_violations": 0
+  },
+  {
+    "exp_id": "Exp C",
+    "configuration": "RF + XGB + Extra Trees Ensemble",
+    "precision": 100.0,
+    "recall": 100.0,
+    "f1_score": 100.0,
+    "roc_auc": 100.0,
+    "pr_auc": 100.0,
+    "false_alarm_rate_pct": 0.0,
+    "latency_ms": 0.0,
+    "safety_compliance_pct": 100.0,
+    "safety_violations": 0
+  },
+  {
+    "exp_id": "Exp D",
+    "configuration": "Ensemble + Safety Engine",
+    "precision": 98.9,
+    "recall": 100.0,
+    "f1_score": 99.45,
+    "roc_auc": 100.0,
+    "pr_auc": 100.0,
+    "false_alarm_rate_pct": 0.028,
+    "latency_ms": 0.064,
+    "safety_compliance_pct": 100.0,
+    "safety_violations": 1
+  },
+  {
+    "exp_id": "Exp E",
+    "configuration": "Ensemble + Safety + RL Mitigation",
+    "precision": 98.9,
+    "recall": 100.0,
+    "f1_score": 99.45,
+    "roc_auc": 100.0,
+    "pr_auc": 100.0,
+    "false_alarm_rate_pct": 0.028,
+    "latency_ms": 0.26,
+    "safety_compliance_pct": 100.0,
+    "safety_violations": 1
+  },
+  {
+    "exp_id": "Exp F",
+    "configuration": "FULL SYSTEM (+ Digital Twin + RAG)",
+    "precision": 98.9,
+    "recall": 100.0,
+    "f1_score": 99.45,
+    "roc_auc": 100.0,
+    "pr_auc": 100.0,
+    "false_alarm_rate_pct": 0.028,
+    "latency_ms": 2.048,
+    "safety_compliance_pct": 100.0,
+    "safety_violations": 1
+  }
+]

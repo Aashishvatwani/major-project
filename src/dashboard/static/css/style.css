@@ -1,0 +1,104 @@
+/*
+  AERO-GUARD Mission Control Dashboard CSS v3.3
+  Structured Aerospace HUD, Glassmorphism, 3D Canvas Card, Chart.js & LED Styles
+*/
+
+:root {
+  --neon-cyan: #00f0ff;
+  --neon-amber: #ffaa00;
+  --neon-red: #ff3344;
+  --neon-emerald: #00ff88;
+  --neon-purple: #b026ff;
+  --bg-cockpit: #060911;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-cockpit);
+  color: #d1d5db;
+  font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
+  user-select: none;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+.font-mono-telemetry {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.font-aerospace {
+  font-family: 'Chakra Petch', sans-serif;
+}
+
+.font-orbitron {
+  font-family: 'Orbitron', sans-serif;
+}
+
+/* Glassmorphic Aerospace Panels */
+.glass-panel {
+  background: rgba(10, 16, 30, 0.78);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(0, 240, 255, 0.2);
+  box-shadow: 0 8px 24px 0 rgba(0, 0, 0, 0.55);
+}
+
+.glass-panel-danger {
+  background: rgba(36, 10, 16, 0.85) !important;
+  border: 1px solid rgba(255, 51, 68, 0.5) !important;
+  box-shadow: 0 0 25px rgba(255, 51, 68, 0.3) !important;
+}
+
+/* CRT Scanline & HUD Grid */
+.crt-scanlines {
+  position: fixed;
+  inset: 0;
+  background: linear-gradient(
+      rgba(18, 16, 16, 0) 50%, 
+      rgba(0, 0, 0, 0.25) 50%
+  ), linear-gradient(
+      90deg,
+      rgba(255, 0, 0, 0.015),
+      rgba(0, 255, 0, 0.01),
+      rgba(0, 0, 255, 0.015)
+  );
+  background-size: 100% 3px, 6px 100%;
+  pointer-events: none;
+  z-index: 99;
+}
+
+/* Strobe and Glow Animations */
+@keyframes fastStrobe {
+  0%, 100% { opacity: 1; background-color: #ff0055; box-shadow: 0 0 16px #ff0055; }
+  50% { opacity: 0.15; background-color: transparent; box-shadow: none; }
+}
+
+.led-strobe {
+  animation: fastStrobe 0.1s infinite !important;
+}
+
+.led-active {
+  background-color: #00f0ff !important;
+  box-shadow: 0 0 12px #00f0ff, 0 0 24px #00f0ff !important;
+}
+
+/* Custom Sleek Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(2, 6, 14, 0.7);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 240, 255, 0.35);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 240, 255, 0.75);
+}

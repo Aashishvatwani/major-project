@@ -1,0 +1,25 @@
+# ==============================================================================
+# Hard Deterministic Spacecraft Safety Override Rules
+# Critical safety rules supersede all ML & RL predictions with 100% priority
+# ==============================================================================
+
+temperature:
+  critical_high_celsius: 65.0       # Thermal runaway threshold
+  critical_low_celsius: -20.0       # Extreme freezing threshold
+  max_rate_of_rise_c_per_sec: 2.5   # Rapid thermal excursion
+
+voltage:
+  critical_overvoltage: 4.35        # Maximum cell charge limit (V)
+  critical_undervoltage: 2.70       # Deep discharge limit (V)
+  abnormal_voltage_drop_rate: 0.80  # Rapid cell collapse (V/s)
+
+current:
+  critical_overcurrent: 8.50        # Short circuit / bus fault limit (A)
+  reverse_current_limit: -0.50      # Reverse discharge into solar array (A)
+
+impedance:
+  critical_impedance_surge: 3.50    # Severe cell degradation / connection loss (Ohm)
+  internal_short_resistance: 0.15   # Internal dendrite short proxy (Ohm)
+
+power:
+  max_continuous_power_watts: 35.0  # Payload + bus power envelope

@@ -1,0 +1,94 @@
+# ==============================================================================
+# Satellite Telemetry Anomaly Detection HITL Pipeline - Default Configuration
+# ==============================================================================
+
+telemetry:
+  sampling_rate_hz: 2.0
+  orbital_period_minutes: 90.0
+  eclipse_duration_minutes: 30.0
+  nominal_voltage: 3.70  # Nominal Li-ion cell voltage (V)
+  nominal_current: 2.50  # Nominal payload current (A)
+  nominal_temp_celsius: 22.0
+  noise_std:
+    voltage: 0.015
+    current: 0.025
+    temperature: 0.10
+
+features:
+  rolling_windows: [5, 20, 60]  # Window sizes in seconds/samples
+  ewma_alpha: 0.15
+  derivatives: ["diff_1", "diff_2"]
+  physics_features:
+    - "impedance_proxy"
+    - "apparent_resistance"
+    - "power_watts"
+    - "joule_dissipation"
+    - "thermal_gradient"
+    - "soc_proxy"
+
+models:
+  random_forest:
+    n_estimators: 150
+    max_depth: 14
+    min_samples_split: 4
+    min_samples_leaf: 2
+    random_state: 42
+    n_jobs: -1
+
+  xgboost:
+    n_estimators: 150
+    max_depth: 6
+    learning_rate: 0.08
+    subsample: 0.85
+    colsample_bytree: 0.85
+    gamma: 0.1
+    eval_metric: "logloss"
+    random_state: 42
+    n_jobs: -1
+
+  extra_trees:
+    n_estimators: 150
+    max_depth: 14
+    min_samples_split: 4
+    min_samples_leaf: 2
+    random_state: 42
+    n_jobs: -1
+
+  ensemble:
+    voting_weights:
+      rf: 0.35
+      xgboost: 0.40
+      extra_trees: 0.25
+    default_threshold: 0.50
+
+reinforcement_learning:
+  agent_type: "q_learning"  # or "dqn"
+  learning_rate: 0.01
+  discount_factor: 0.95
+  epsilon_start: 1.0
+  epsilon_min: 0.05
+  epsilon_decay: 0.995
+  training_episodes: 40
+  reward_weights:
+    true_positive: 15.0
+    true_negative: 1.0
+    false_positive: -6.0
+    false_negative: -35.0
+    action_switch_penalty: -0.5
+    safe_mode_downtime_penalty: -3.0
+
+safety_override:
+  enabled: true
+  rules_file: "config/safety_rules.yaml"
+
+hitl:
+  serial_port: "AUTO"  # "AUTO", "COM3", "/dev/ttyACM0", etc.
+  baud_rate: 115200
+  timeout: 1.0
+  auto_fallback_virtual: true
+  packet_sync_byte: 0xAA
+
+dashboard:
+  host: "127.0.0.1"
+  port: 8000
+  telemetry_buffer_size: 200

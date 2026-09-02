@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AERO-GUARD | Autonomous Spacecraft Health Management & HITL Digital Twin</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Three.js and OrbitControls -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@300;400;500;700&family=Orbitron:wght@500;700;900&family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛰️</text></svg>">
+  <link rel="stylesheet" href="/static/css/style.css?v=3.3.0">
+</head>
+<body class="theme-space bg-[#060911] text-gray-200 font-aerospace min-h-screen flex flex-col">
+
+  <!-- Scanlines Overlay -->
+  <div class="crt-scanlines"></div>
+
+  <!-- Global Container -->
+  <div class="mission-wrapper flex-1 flex flex-col p-3 md:p-4 space-y-3 z-10 max-w-[1920px] mx-auto w-full">
+    
+    <!-- Top Global Aerospace HUD Header -->
+    <header class="glass-panel rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 border border-cyan-500/25">
+      <div class="flex items-center space-x-3.5">
+        <div class="relative flex items-center justify-center w-10 h-10 rounded-lg bg-cyan-950/70 border border-cyan-400/50 shadow-inner">
+          <span class="text-xl">🛰️</span>
+          <span id="header-pulse-beacon" class="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-emerald-400 animate-ping"></span>
+          <span id="header-beacon-dot" class="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-emerald-500"></span>
+        </div>
+        <div>
+          <div class="flex items-center space-x-2">
+            <h1 class="text-base md:text-lg font-orbitron font-bold tracking-widest text-white uppercase">AERO-GUARD <span class="text-xs text-cyan-400 font-mono-telemetry font-normal">HITL DIGITAL TWIN</span></h1>
+            <span id="overall-status-badge" class="px-2 py-0.5 text-[10px] font-mono-telemetry font-bold tracking-wider uppercase rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+              NOMINAL STATE
+            </span>
+          </div>
+          <p class="text-[11px] text-gray-400 font-mono-telemetry tracking-wide">AUTONOMOUS SATELLITE HEALTH MANAGEMENT (FDIR) // EPS & BATTERY TELEMETRY</p>
+        </div>
+      </div>
+
+      <!-- Telemetry Info Badges & Action Controls -->
+      <div class="flex items-center space-x-4 md:space-x-6">
+        <div class="hidden lg:flex items-center space-x-5 text-xs font-mono-telemetry">
+          <div class="text-right">
+            <span class="text-gray-500 block text-[9px] uppercase">DOWNLINK STATUS</span>
+            <span id="downlink-status" class="text-emerald-400 font-bold">2.0 Hz LIVE</span>
+          </div>
+          <div class="text-right">
+            <span class="text-gray-500 block text-[9px] uppercase">ORBIT PARAMETER</span>
+            <span class="text-cyan-300">LEO 552 KM • INC 97.6°</span>
+          </div>
+          <div class="text-right">
+            <span class="text-gray-500 block text-[9px] uppercase">MET (MISSION TIME)</span>
+            <span id="mission-clock" class="text-emerald-400 font-semibold">T+142:08:44:19</span>
+          </div>
+          <div class="text-right">
+            <span class="text-gray-500 block text-[9px] uppercase">ORBIT PHASE</span>
+            <span id="eclipse-status" class="text-amber-400">DIRECT SUNLIGHT</span>
+          </div>
+        </div>
+
+        <div class="flex items-center space-x-2">
+          <button id="btn-audio-toggle" class="px-2.5 py-1.5 rounded-lg border border-cyan-500/30 hover:border-cyan-400 bg-cyan-950/50 hover:bg-cyan-900/60 text-xs font-mono-telemetry text-cyan-300 transition flex items-center space-x-1 shadow-sm">
+            <span id="audio-icon">🔊</span>
+            <span id="audio-status">AUDIO ON</span>
+          </button>
+          <button id="btn-autopilot-toggle" class="px-2.5 py-1.5 rounded-lg border border-purple-500/40 hover:border-purple-400 bg-purple-950/40 hover:bg-purple-900/60 text-xs font-mono-telemetry text-purple-300 transition flex items-center space-x-1 shadow-sm">
+            <span>🤖</span>
+            <span id="autopilot-status">AUTO-PILOT</span>
+          </button>
+          <button id="btn-reset-nominal" class="px-2.5 py-1.5 rounded-lg border border-emerald-500/40 hover:border-emerald-400 bg-emerald-950/40 hover:bg-emerald-900/50 text-xs font-mono-telemetry text-emerald-300 transition flex items-center space-x-1 shadow-sm">
+            <span>🔄</span>
+            <span>RESET EPS</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Top Real-Time Telemetry Metrics Strip -->
+    <section class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+      <!-- Voltage Card -->
+      <div class="glass-panel p-3 rounded-xl border border-cyan-500/20 relative overflow-hidden">
+        <div class="flex justify-between items-center text-[10px] font-mono-telemetry text-gray-400 uppercase">
+          <span>Bus Voltage</span>
+          <span id="volt-warning" class="hidden text-red-400 font-bold animate-pulse">LOW</span>
+        </div>
+        <div class="mt-1 flex items-baseline space-x-1">
+          <span id="disp-voltage" class="text-2xl font-mono-telemetry font-bold text-cyan-300">3.720</span>
+          <span class="text-xs text-gray-400">V</span>
+        </div>
+        <div class="w-full bg-gray-800 h-1.5 rounded-full mt-2 overflow-hidden">
+          <div id="bar-voltage" class="h-full bg-cyan-400 transition-all duration-200" style="width: 78%;"></div>
+        </div>
+        <div class="flex justify-between items-center text-[9px] font-mono-telemetry text-gray-500 mt-1">
+          <span id="disp-soc">SOC: 85.0%</span>
+          <span>Nom: 3.70V</span>
+        </div>
+      </div>
+
+      <!-- Current Card -->
+      <div class="glass-panel p-3 rounded-xl border border-cyan-500/20 relative overflow-hidden">
+        <div class="flex justify-between items-center text-[10px] font-mono-telemetry text-gray-400 uppercase">
+          <span>Load Current</span>
+          <span id="curr-warning" class="hidden text-amber-400 font-bold animate-pulse">SPIKE</span>
+        </div>
+        <div class="mt-1 flex items-baseline space-x-1">
+          <span id="disp-current" class="text-2xl font-mono-telemetry font-bold text-amber-300">2.450</span>
+          <span class="text-xs text-gray-400">A</span>
+        </div>
+        <div class="w-full bg-gray-800 h-1.5 rounded-full mt-2 overflow-hidden">
+          <div id="bar-current" class="h-full bg-amber-400 transition-all duration-200" style="width: 32%;"></div>
+        </div>
+        <div class="flex justify-between items-center text-[9px] font-mono-telemetry text-gray-500 mt-1">
+          <span id="disp-power">P: 9.11 W</span>
+          <span>Max: 8.0A</span>
+        </div>
+      </div>
+
+      <!-- Core Temperature Card -->
+      <div class="glass-panel p-3 rounded-xl border border-cyan-500/20 relative overflow-hidden">
+        <div class="flex justify-between items-center text-[10px] font-mono-telemetry text-gray-400 uppercase">
+          <span>Core Temp</span>
+          <span id="temp-warning" class="hidden text-red-400 font-bold animate-pulse">RUNAWAY</span>
+        </div>
+        <div class="mt-1 flex items-baseline space-x-1">
+          <span id="disp-temp" class="text-2xl font-mono-telemetry font-bold text-purple-300">22.4</span>
+          <span class="text-xs text-gray-400">°C</span>
+        </div>
+        <div class="w-full bg-gray-800 h-1.5 rounded-full mt-2 overflow-hidden">
+          <div id="bar-temp" class="h-full bg-purple-400 transition-all duration-200" style="width: 28%;"></div>
+        </div>
+        <div class="flex justify-between items-center text-[9px] font-mono-telemetry text-gray-500 mt-1">
+          <span id="disp-dtdt">dT/dt: +0.02°C/s</span>
+          <span>Limit: 65°C</span>
+        </div>
+      </div>
+
+      <!-- Internal Impedance Card -->
+      <div class="glass-panel p-3 rounded-xl border border-cyan-500/20 relative overflow-hidden">
+        <div class="flex justify-between items-center text-[10px] font-mono-telemetry text-gray-400 uppercase">
+          <span>Impedance R_int</span>
+          <span id="esr-warning" class="hidden text-amber-400 font-bold animate-pulse">HIGH</span>
+        </div>
+        <div class="mt-1 flex items-baseline space-x-1">
+          <span id="disp-esr" class="text-2xl font-mono-telemetry font-bold text-cyan-300">0.045</span>
+          <span class="text-xs text-gray-400">Ω</span>
+        </div>
+        <div class="w-full bg-gray-800 h-1.5 rounded-full mt-2 overflow-hidden">
+          <div id="bar-esr" class="h-full bg-cyan-400 transition-all duration-200" style="width: 15%;"></div>
+        </div>
+        <div class="flex justify-between items-center text-[9px] font-mono-telemetry text-gray-500 mt-1">
+          <span>Proxy |ΔV/ΔI|</span>
+          <span>Nom: 0.045Ω</span>
+        </div>
+      </div>
+
+      <!-- Fault Diagnosis Card -->
+      <div class="glass-panel p-3 rounded-xl border border-cyan-500/20 relative overflow-hidden">
+        <div class="flex justify-between items-center text-[10px] font-mono-telemetry text-gray-400 uppercase">
+          <span>Fault Diagnosis</span>
+          <span id="disp-diag-conf" class="text-cyan-400 font-bold">100% CONF</span>
+        </div>
+        <div class="mt-1">
+          <span id="disp-primary-fault" class="text-lg font-orbitron font-bold text-emerald-400 block truncate">NOMINAL</span>
+        </div>
+        <div class="w-full bg-gray-800 h-1.5 rounded-full mt-2 overflow-hidden">
+          <div class="h-full bg-emerald-400 transition-all duration-200" style="width: 100%;"></div>
+        </div>
+        <div class="flex justify-between items-center text-[9px] font-mono-telemetry text-gray-500 mt-1">
+          <span>Multi-Class FDIR</span>
+          <span class="text-emerald-400">OPTIMAL</span>
+        </div>
+      </div>
+
+      <!-- Severity & Risk Score Card -->
+      <div class="glass-panel p-3 rounded-xl border border-cyan-500/20 relative overflow-hidden">
+        <div class="flex justify-between items-center text-[10px] font-mono-telemetry text-gray-400 uppercase">
+          <span>Severity / Risk</span>
+          <span id="disp-risk-score" class="text-gray-400 font-bold">INDEX: 0.05</span>
+        </div>
+        <div class="mt-1">
+          <span id="disp-severity" class="text-lg font-orbitron font-bold text-emerald-400 block truncate">NOMINAL</span>
+        </div>
+        <div class="w-full bg-gray-800 h-1.5 rounded-full mt-2 overflow-hidden">
+          <div id="bar-risk" class="h-full bg-emerald-400 transition-all duration-200" style="width: 5%;"></div>
+        </div>
+        <div class="flex justify-between items-center text-[9px] font-mono-telemetry text-gray-500 mt-1">
+          <span>Dual Risk Gate</span>
+          <span class="text-cyan-400" id="disp-safety-status">SECURE</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Main Multi-Panel Aerospace Grid -->
+    <main class="grid grid-cols-1 lg:grid-cols-12 gap-3 flex-1">
+      
+      <!-- Left Column: 3D Spacecraft Digital Twin & Hardware HITL (4 Cols) -->
+      <div class="lg:col-span-4 flex flex-col space-y-3">
+        
+        <!-- 3D Spacecraft Canvas Card -->
+        <div class="glass-panel rounded-xl p-3 border border-cyan-500/25 flex-1 flex flex-col min-h-[360px] relative overflow-hidden">
+          <div class="flex items-center justify-between pb-2 mb-2 border-b border-cyan-500/20">
+            <div class="flex items-center space-x-2">
+              <span class="inline-block w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+              <h2 class="text-xs font-orbitron font-bold uppercase tracking-widest text-cyan-200">Spacecraft 3D Digital Twin</h2>
+            </div>
+            <div class="flex items-center space-x-1">
+              <button id="view-orbit" class="py-0.5 px-2 rounded bg-cyan-950/70 border border-cyan-400 text-cyan-200 text-[10px] font-mono-telemetry font-bold">ORBIT</button>
+              <button id="view-thermal" class="py-0.5 px-2 rounded bg-black/40 border border-gray-700 text-gray-400 hover:border-red-400 hover:text-red-300 text-[10px] font-mono-telemetry transition">IR THERM</button>
+              <button id="view-battery" class="py-0.5 px-2 rounded bg-black/40 border border-gray-700 text-gray-400 hover:border-cyan-400 hover:text-cyan-300 text-[10px] font-mono-telemetry transition">BATTERY</button>
+            </div>
+          </div>
+
+          <!-- WebGL 3D Canvas Box -->
+          <div class="relative flex-1 w-full rounded-lg bg-black/80 border border-cyan-900/50 overflow-hidden cursor-grab active:cursor-grabbing min-h-[260px]">
+            <div id="canvas-container" class="absolute inset-0 w-full h-full"></div>
+            
+            <!-- Hotspot Tag Overlay -->
+            <div class="absolute bottom-2 left-2 pointer-events-none z-10 text-[9px] font-mono-telemetry text-gray-400 bg-black/60 px-2 py-1 rounded border border-cyan-500/20">
+              <span class="text-cyan-400 font-bold">AURA-7 EPS BUS</span> | 32-Cell 8S4P Module | PBR r128
+            </div>
+            <div id="hotspot-pulse-status" class="absolute top-2 right-2 pointer-events-none z-10 text-[10px] font-mono-telemetry text-amber-300 bg-black/70 px-2 py-0.5 rounded border border-amber-500/30 font-bold hidden">
+              HOTSPOT ACTIVE
+            </div>
+          </div>
+
+          <div class="flex justify-between items-center text-[10px] font-mono-telemetry text-gray-400 mt-2 px-1">
+            <span>🖱️ Click & drag to rotate 3D view</span>
+            <span class="text-cyan-300">OrbitControls Active</span>
+          </div>
+        </div>
+
+        <!-- Hardware HITL Actuator & Human Gate Card -->
+        <div class="glass-panel rounded-xl p-3.5 border border-cyan-500/25 space-y-2.5">
+          <div class="flex items-center justify-between pb-1.5 border-b border-cyan-500/20">
+            <span class="text-xs font-orbitron font-bold uppercase tracking-wider text-cyan-200">HITL Hardware Actuator</span>
+            <span class="text-[10px] font-mono-telemetry text-cyan-400">115200 BAUD</span>
+          </div>
+
+          <div class="flex items-center justify-between p-2 rounded-lg bg-black/50 border border-white/5">
+            <div class="flex items-center space-x-3">
+              <div id="pin13-led-dot" class="w-4 h-4 rounded-full bg-gray-700 border border-gray-500 transition-all duration-200 shadow-sm"></div>
+              <div>
+                <span id="pin13-led-text" class="text-xs font-mono-telemetry font-bold text-gray-200 block">PIN 13: LOW (NOMINAL)</span>
+                <span class="text-[10px] font-mono-telemetry text-gray-400">Arduino Uno Digital Pin 13 LED Fixture</span>
+              </div>
+            </div>
+            <span class="text-[10px] font-mono-telemetry text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-500/30">SYNCED</span>
+          </div>
+
+          <!-- Manual Operator Review Gate -->
+          <div id="operator-review-box" class="space-y-1.5">
+            <div class="flex justify-between items-center text-[10px] font-mono-telemetry">
+              <span class="text-gray-400">Action Gateway Status:</span>
+              <span id="auth-status-text" class="text-cyan-300 font-semibold">Autonomous Auto-Pilot</span>
+            </div>
+            <button id="btn-operator-auth" class="hidden w-full py-2 px-3 rounded-lg bg-gradient-to-r from-red-600 to-amber-600 hover:from-red-500 hover:to-amber-500 text-white font-orbitron text-xs font-bold uppercase tracking-wider animate-pulse shadow-lg" onclick="manualAuthorizeMitigation()">
+              ⚡ AUTHORIZE MITIGATION COMMAND
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Center Column: Dual Telemetry Charts & Counterfactual Action Matrix (5 Cols) -->
+      <div class="lg:col-span-5 flex flex-col space-y-3">
+        
+        <!-- Dual Real-Time Telemetry Charts -->
+        <div class="glass-panel rounded-xl p-3.5 border border-cyan-500/25 flex-1 flex flex-col space-y-3">
+          <div class="flex items-center justify-between pb-1.5 border-b border-cyan-500/20">
+            <div class="flex items-center space-x-2">
+              <span class="text-cyan-400">📈</span>
+              <h2 class="text-xs font-orbitron font-bold uppercase tracking-widest text-cyan-200">Real-Time Telemetry Dynamics</h2>
+            </div>
+            <span class="text-[10px] font-mono-telemetry text-gray-400">CHART.JS DUAL-AXIS</span>
+          </div>
+
+          <!-- Chart 1: Voltage & Current -->
+          <div class="space-y-1 flex-1 min-h-[140px]">
+            <div class="flex justify-between items-center text-[10px] font-mono-telemetry">
+              <span class="text-cyan-300 font-semibold">Bus Voltage (V) & Load Current (A)</span>
+              <span class="text-gray-500">Live 50 Points</span>
+            </div>
+            <div class="relative w-full h-32 md:h-36 bg-black/40 rounded-lg p-1 border border-cyan-900/30">
+              <canvas id="viChart"></canvas>
+            </div>
+          </div>
+
+          <!-- Chart 2: Temperature & Anomaly Probability -->
+          <div class="space-y-1 flex-1 min-h-[140px]">
+            <div class="flex justify-between items-center text-[10px] font-mono-telemetry">
+              <span class="text-purple-300 font-semibold">Cell Temperature (°C) & P(Anomaly)</span>
+              <span class="text-red-400 font-semibold" id="ens-prob-pill">P(Anomaly): 0.012</span>
+            </div>
+            <div class="relative w-full h-32 md:h-36 bg-black/40 rounded-lg p-1 border border-purple-900/30">
+              <canvas id="tpChart"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Digital Twin Counterfactual Forward Projections Matrix -->
+        <div class="glass-panel rounded-xl p-3.5 border border-cyan-500/25 space-y-2">
+          <div class="flex justify-between items-center pb-1.5 border-b border-cyan-500/20">
+            <div class="flex items-center space-x-2">
+              <span class="text-emerald-400">🔮</span>
+              <h3 class="text-xs font-orbitron font-bold uppercase tracking-widest text-cyan-200">Counterfactual Simulator (60s Horizon)</h3>
+            </div>
+            <span id="best-action-badge" class="text-[9px] font-mono-telemetry text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-500/30 font-bold">ACTION 0: OPTIMAL</span>
+          </div>
+
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] font-mono-telemetry" id="cf-matrix-container">
+            <!-- Action 0 -->
+            <div id="cf-card-0" class="p-2 rounded-lg bg-black/45 border border-emerald-500/70 space-y-1">
+              <div class="font-bold text-gray-200 text-[11px]">ACT 0: CONTINUE</div>
+              <div class="text-gray-400 text-[9px]">T<sub>60s</sub>: <span id="cf-t0" class="text-cyan-300 font-bold">22.4°C</span></div>
+              <div class="text-gray-400 text-[9px]">SOC: <span id="cf-soc0" class="text-emerald-300 font-bold">84.9%</span></div>
+              <div class="text-gray-400 text-[9px]">Safety: <span id="cf-safe0" class="text-white">1.00</span></div>
+              <div class="text-emerald-400 text-[9px] font-bold" id="cf-status0">AI RECOMMENDED</div>
+            </div>
+
+            <!-- Action 1 -->
+            <div id="cf-card-1" class="p-2 rounded-lg bg-black/45 border border-white/10 space-y-1">
+              <div class="font-bold text-gray-200 text-[11px]">ACT 1: PRE-ARM</div>
+              <div class="text-gray-400 text-[9px]">T<sub>60s</sub>: <span id="cf-t1" class="text-cyan-300 font-bold">22.3°C</span></div>
+              <div class="text-gray-400 text-[9px]">SOC: <span id="cf-soc1" class="text-emerald-300 font-bold">84.9%</span></div>
+              <div class="text-gray-400 text-[9px]">Safety: <span id="cf-safe1" class="text-white">0.98</span></div>
+              <div class="text-gray-500 text-[9px]" id="cf-status1">STANDBY</div>
+            </div>
+
+            <!-- Action 2 -->
+            <div id="cf-card-2" class="p-2 rounded-lg bg-black/45 border border-white/10 space-y-1">
+              <div class="font-bold text-gray-200 text-[11px]">ACT 2: LOAD SHED</div>
+              <div class="text-gray-400 text-[9px]">T<sub>60s</sub>: <span id="cf-t2" class="text-cyan-300 font-bold">21.8°C</span></div>
+              <div class="text-gray-400 text-[9px]">SOC: <span id="cf-soc2" class="text-emerald-300 font-bold">85.4%</span></div>
+              <div class="text-gray-400 text-[9px]">Safety: <span id="cf-safe2" class="text-white">0.95</span></div>
+              <div class="text-amber-400 text-[9px]" id="cf-status2">-35% PAYLOAD</div>
+            </div>
+
+            <!-- Action 3 -->
+            <div id="cf-card-3" class="p-2 rounded-lg bg-black/45 border border-white/10 space-y-1">
+              <div class="font-bold text-gray-200 text-[11px]">ACT 3: SAFE MODE</div>
+              <div class="text-gray-400 text-[9px]">T<sub>60s</sub>: <span id="cf-t3" class="text-cyan-300 font-bold">19.5°C</span></div>
+              <div class="text-gray-400 text-[9px]">SOC: <span id="cf-soc3" class="text-emerald-300 font-bold">85.8%</span></div>
+              <div class="text-gray-400 text-[9px]">Safety: <span id="cf-safe3" class="text-white">0.99</span></div>
+              <div class="text-red-400 text-[9px]" id="cf-status3">ISOLATION</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Right Column: AI Agent RAG Reasoning & Fault Injection Bay (3 Cols) -->
+      <div class="lg:col-span-3 flex flex-col space-y-3">
+        
+        <!-- AI Flight Diagnostic Reasoner & RAG Citations Card -->
+        <div class="glass-panel rounded-xl p-3.5 border border-purple-500/30 flex-1 flex flex-col space-y-2">
+          <div class="flex items-center justify-between pb-1.5 border-b border-purple-500/20">
+            <div class="flex items-center space-x-2">
+              <span class="text-purple-400">🤖</span>
+              <h2 class="text-xs font-orbitron font-bold uppercase tracking-widest text-purple-200">AI Diagnostic Reasoner</h2>
+            </div>
+            <span class="text-[9px] font-mono-telemetry text-cyan-400 bg-cyan-950/40 px-1.5 py-0.5 rounded border border-cyan-500/30 animate-pulse">● RAG SYNC</span>
+          </div>
+
+          <div class="p-2 rounded-lg bg-black/70 border border-white/5 flex-1 flex flex-col space-y-1.5 font-mono-telemetry text-[11px]">
+            <div id="ai-agent-text" class="text-emerald-300 text-[10.5px] leading-relaxed flex-1 overflow-y-auto whitespace-pre-line bg-black/50 p-2 rounded border border-white/5 min-h-[110px]">
+              [AI DIAGNOSTIC REASONING]
+              • Subsystem State: LOW RISK (Index: 0.05)
+              • ML Ensemble Consensus: 1.2% Anomaly
+              • RAG Standard: ECSS-E-ST-20C Nominal operating limits verified.
+            </div>
+            <div class="text-[9.5px] text-purple-400 border-t border-purple-500/20 pt-1" id="ai-rag-citation">
+              📖 Citation: ECSS-E-ST-20C: Nominal power subsystem parameters observed.
+            </div>
+          </div>
+
+          <!-- Multi-Model ML Ensemble Consensus Breakdown -->
+          <div class="p-2.5 rounded-lg bg-black/50 border border-cyan-500/20 space-y-1.5">
+            <div class="flex justify-between items-center text-[10px] font-mono-telemetry">
+              <span class="text-cyan-300 font-bold uppercase">ML Consensus P(Anomaly):</span>
+              <span id="disp-p-ens" class="text-emerald-400 font-bold">0.012</span>
+            </div>
+            <div class="w-full bg-gray-800 h-2 rounded-full overflow-hidden">
+              <div id="bar-p-ens" class="h-full bg-gradient-to-r from-emerald-400 via-amber-400 to-red-500 transition-all duration-300" style="width: 1.2%;"></div>
+            </div>
+            <div class="grid grid-cols-3 gap-1 text-[9px] font-mono-telemetry text-gray-400 pt-1">
+              <div class="bg-black/30 p-1 rounded border border-white/5 text-center">
+                <span class="block text-gray-500">RF (35%)</span>
+                <span id="disp-rf-val" class="text-cyan-300 font-bold">0.01</span>
+              </div>
+              <div class="bg-black/30 p-1 rounded border border-white/5 text-center">
+                <span class="block text-gray-500">XGB (40%)</span>
+                <span id="disp-xgb-val" class="text-amber-300 font-bold">0.01</span>
+              </div>
+              <div class="bg-black/30 p-1 rounded border border-white/5 text-center">
+                <span class="block text-gray-500">ET (25%)</span>
+                <span id="disp-et-val" class="text-purple-300 font-bold">0.01</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Anomaly Injection Bay Card -->
+        <div class="glass-panel rounded-xl p-3.5 border border-cyan-500/25 space-y-2">
+          <div class="flex items-center justify-between pb-1.5 border-b border-cyan-500/20">
+            <div class="flex items-center space-x-2">
+              <span class="text-amber-400">⚡</span>
+              <h2 class="text-xs font-orbitron font-bold uppercase tracking-widest text-amber-200">Orbital Anomaly Bay</h2>
+            </div>
+            <span class="text-[9px] font-mono-telemetry bg-red-950/60 text-red-300 border border-red-500/30 px-1.5 py-0.5 rounded">
+              LIVE FAULT BUS
+            </span>
+          </div>
+
+          <!-- Fault Buttons List -->
+          <div class="space-y-1.5 text-xs font-mono-telemetry">
+            <!-- 1. Thermal Runaway -->
+            <button class="w-full p-2 rounded-lg bg-black/45 border border-white/10 hover:border-red-500/50 transition flex items-center justify-between text-left group" onclick="triggerFault('thermal_runaway')">
+              <div class="flex items-center space-x-2">
+                <span>🔥</span>
+                <div>
+                  <div class="text-[11px] font-orbitron font-bold text-white group-hover:text-red-400">Thermal Runaway</div>
+                  <div class="text-[9px] text-gray-400">dT/dt > 2.0°C/s • Flame Embers</div>
+                </div>
+              </div>
+              <span class="text-[9px] text-red-400 font-bold bg-red-950/50 px-1.5 py-0.5 rounded border border-red-500/30">INJECT</span>
+            </button>
+
+            <!-- 2. Internal Micro-Short -->
+            <button class="w-full p-2 rounded-lg bg-black/45 border border-white/10 hover:border-cyan-400/50 transition flex items-center justify-between text-left group" onclick="triggerFault('internal_short')">
+              <div class="flex items-center space-x-2">
+                <span>⚡</span>
+                <div>
+                  <div class="text-[11px] font-orbitron font-bold text-white group-hover:text-cyan-300">Internal Micro-Short</div>
+                  <div class="text-[9px] text-gray-400">+4.5A Spike • Lightning Arcs</div>
+                </div>
+              </div>
+              <span class="text-[9px] text-cyan-300 font-bold bg-cyan-950/50 px-1.5 py-0.5 rounded border border-cyan-500/30">INJECT</span>
+            </button>
+
+            <!-- 3. Deep Undervoltage -->
+            <button class="w-full p-2 rounded-lg bg-black/45 border border-white/10 hover:border-amber-400/50 transition flex items-center justify-between text-left group" onclick="triggerFault('undervoltage')">
+              <div class="flex items-center space-x-2">
+                <span>🔋</span>
+                <div>
+                  <div class="text-[11px] font-orbitron font-bold text-white group-hover:text-amber-300">Deep Undervoltage</div>
+                  <div class="text-[9px] text-gray-400">< 2.70V • ADCS Tumble</div>
+                </div>
+              </div>
+              <span class="text-[9px] text-amber-300 font-bold bg-amber-950/50 px-1.5 py-0.5 rounded border border-amber-500/30">INJECT</span>
+            </button>
+
+            <!-- 4. Impedance Surge -->
+            <button class="w-full p-2 rounded-lg bg-black/45 border border-white/10 hover:border-purple-400/50 transition flex items-center justify-between text-left group" onclick="triggerFault('high_impedance')">
+              <div class="flex items-center space-x-2">
+                <span>📈</span>
+                <div>
+                  <div class="text-[11px] font-orbitron font-bold text-white group-hover:text-purple-300">Impedance Surge</div>
+                  <div class="text-[9px] text-gray-400">R_int Surge • ESR Sag</div>
+                </div>
+              </div>
+              <span class="text-[9px] text-purple-300 font-bold bg-purple-950/50 px-1.5 py-0.5 rounded border border-purple-500/30">INJECT</span>
+            </button>
+
+            <!-- 5. Sensor Glitch -->
+            <button class="w-full p-2 rounded-lg bg-black/45 border border-white/10 hover:border-emerald-400/50 transition flex items-center justify-between text-left group" onclick="triggerFault('sensor_fault')">
+              <div class="flex items-center space-x-2">
+                <span>📡</span>
+                <div>
+                  <div class="text-[11px] font-orbitron font-bold text-white group-hover:text-emerald-300">Sensor Glitch</div>
+                  <div class="text-[9px] text-gray-400">12Hz Noise • SNR Drop</div>
+                </div>
+              </div>
+              <span class="text-[9px] text-emerald-300 font-bold bg-emerald-950/50 px-1.5 py-0.5 rounded border border-emerald-500/30">INJECT</span>
+            </button>
+          </div>
+
+          <!-- Clear Faults Button -->
+          <button class="w-full py-1.5 px-2 rounded-lg bg-emerald-950/40 border border-emerald-500/50 hover:bg-emerald-900/60 text-emerald-300 font-orbitron text-[10px] font-bold uppercase tracking-wider transition flex items-center justify-center space-x-1" onclick="clearFaults()">
+            <span>✅</span>
+            <span>CLEAR ALL INJECTED FAULTS</span>
+          </button>
+        </div>
+
+      </div>
+
+    </main>
+
+    <!-- Bottom Aerospace Event Console Bar -->
+    <footer class="glass-panel rounded-xl px-4 py-2 border border-cyan-500/25 flex items-center justify-between text-[11px] font-mono-telemetry">
+      <div class="flex items-center space-x-3 overflow-hidden">
+        <span class="text-cyan-400 font-bold uppercase shrink-0">LOG BUS:</span>
+        <div id="terminal-ticker" class="truncate text-gray-300">
+          [00:00:01] AERO-GUARD HITL online. Digital Twin synchronized with PySerial hardware bridge.
+        </div>
+      </div>
+      <div class="shrink-0 flex items-center space-x-3 text-[10px] font-mono-telemetry text-gray-400 pl-4 border-l border-cyan-500/20">
+        <span id="fps-counter" class="text-cyan-400">60 FPS</span>
+        <span>THREE.JS PBR</span>
+      </div>
+    </footer>
+
+  </div>
+
+  <script src="/static/js/dashboard.js?v=3.4.1"></script>
+</body>
+</html>
