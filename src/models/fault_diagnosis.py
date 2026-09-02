@@ -167,6 +167,7 @@ class SeverityEstimator:
 
         if safety_override or temp >= 65.0 or volt <= 2.20 or curr >= 7.5 or risk_score >= 0.85:
             severity = "EMERGENCY"
+            risk_score = max(risk_score, 0.85)
         elif risk_score >= 0.60 or fault_type in ["THERMAL_RUNAWAY", "INTERNAL_SHORT"]:
             severity = "CRITICAL"
         elif risk_score >= 0.35 or fault_type != "NOMINAL":

@@ -1,0 +1,47 @@
+# Byte-compiled / Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Pytest & Testing caches
+.pytest_cache/
+.coverage
+htmlcov/
+.hypothesis/
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Machine Learning Saved Models & Cache
+*.joblib
+*.pkl
+
+# Logs & Temporary Files
+*.log
+*.tmp
+*.temp
+.cache/
+
+# IDE & Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# OS generated files
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# Environment files
+.env
+.env.local

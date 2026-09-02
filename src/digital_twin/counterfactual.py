@@ -77,7 +77,8 @@ class DigitalTwinCounterfactualSimulator:
                 # Fault dynamics injection
                 if fault_type == "THERMAL_RUNAWAY":
                     # Internal exothermic reaction if not aggressively mitigated
-                    exotherm = 0.18 * np.exp((t_cell - 25.0) / 18.0) * (1.0 - 0.75 * cooling_boost)
+                    exponent = np.clip((t_cell - 25.0) / 18.0, -50.0, 20.0)
+                    exotherm = 0.18 * np.exp(exponent) * (1.0 - 0.75 * cooling_boost)
                 elif fault_type == "INTERNAL_SHORT":
                     # Short circuit current heat
                     exotherm = 0.12 * (1.0 - 0.8 * cooling_boost)
@@ -90,7 +91,7 @@ class DigitalTwinCounterfactualSimulator:
                 thermal_dissipation = 0.04 * (t_cell - ambient_sink) * (1.0 + cooling_boost)
 
                 dT = (joule_heat + exotherm - thermal_dissipation) * self.dt
-                t_cell += dT
+                t_cell = float(np.clip(t_cell + dT, -50.0, 300.0))
                 peak_t = max(peak_t, t_cell)
 
                 # Electrochemical discharge / charge

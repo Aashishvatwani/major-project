@@ -89,7 +89,7 @@ def run_streaming_mode(
             rl_act = record["rl_action_name"]
             status = record["final_status"]
 
-            led_symbol = "🔴 ON" if pin13 == 1 else "⚪ OFF"
+            led_symbol = "[ON]" if pin13 == 1 else "[OFF]"
             alert_tag = f"[bold red]ANOMALY ({p_ens:.2f})[/bold red]" if dec == 1 else f"[green]NOMINAL ({p_ens:.2f})[/green]"
 
             if HAS_RICH and console:
