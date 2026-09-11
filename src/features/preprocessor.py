@@ -23,7 +23,8 @@ class TelemetryPreprocessor:
 
     def fit(self, X: pd.DataFrame) -> "TelemetryPreprocessor":
         """Fits scaler on training features"""
-        self.feature_names = [col for col in X.columns if col not in ["timestamp", "anomaly_label", "anomaly_type", "injected_fault"]]
+        excluded = ["timestamp", "anomaly_label", "anomaly_type", "injected_fault", "orbit_id", "event_id"]
+        self.feature_names = [col for col in X.columns if col not in excluded]
         X_sub = X[self.feature_names].copy().replace([np.inf, -np.inf], 0.0).fillna(0.0)
         self.scaler.fit(X_sub)
         self.is_fitted = True

@@ -1,6 +1,6 @@
 """
 Satellite HITL Pipeline — Comprehensive Research Ablation Study & Benchmark Generator
-Evaluates the 6 experimental configurations defined in the system architecture:
+Evaluates the 6 experimental configurations defined in the system architecture on unseen out-of-sample telemetry:
 1. Experiment A: XGBoost Only
 2. Experiment B: Random Forest + XGBoost
 3. Experiment C: RF + XGBoost + Extra Trees (Calibrated Ensemble)
@@ -28,7 +28,7 @@ from sklearn.metrics import (
 # Add project root to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.ingestion.data_loader import TelemetryDataLoader
+from data.synthetic_generator import SatelliteTelemetryGenerator
 from src.features.feature_engineering import TelemetryFeatureExtractor
 from src.features.preprocessor import TelemetryPreprocessor
 from src.models.ensemble_classifier import SatelliteEnsembleClassifier
@@ -39,16 +39,16 @@ from src.digital_twin.counterfactual import DigitalTwinCounterfactualSimulator
 from src.reasoning.ai_agent_rag import AIAgentRAGReasoner
 
 
-def run_ablation_benchmark(duration_minutes: float = 60.0, output_dir: str = "docs") -> Dict[str, Any]:
+def run_ablation_benchmark(duration_minutes: float = 90.0, output_dir: str = "docs") -> Dict[str, Any]:
     os.makedirs(output_dir, exist_ok=True)
     print("=" * 85)
     print(" SATELLITE HITL PIPELINE - RESEARCH ABLATION STUDY & BENCHMARK SUITE ")
     print("=" * 85)
 
-    # 1. Load Data
-    print(">> Generating test evaluation telemetry dataset...")
-    loader = TelemetryDataLoader("data/raw/synthetic_telemetry.csv")
-    df_raw = loader.load_or_generate_dataset(duration_minutes=duration_minutes)
+    # 1. Generate an independent unseen out-of-sample orbit dataset (random_seed=101)
+    print(">> Generating unseen out-of-sample test orbit telemetry dataset (seed=101)...")
+    generator = SatelliteTelemetryGenerator(random_seed=101)
+    df_raw = generator.generate_telemetry_dataset(duration_minutes=duration_minutes, inject_anomalies=True)
     extractor = TelemetryFeatureExtractor()
     df_feats = extractor.extract_batch_features(df_raw)
 
@@ -64,7 +64,7 @@ def run_ablation_benchmark(duration_minutes: float = 60.0, output_dir: str = "do
     y_true = df_feats["anomaly_label"].values
     n_samples = len(y_true)
 
-    print(f">> Evaluating {n_samples} telemetry frames across 6 architecture configurations...")
+    print(f">> Evaluating {n_samples} unseen telemetry frames across 6 architecture configurations...")
 
     # Individual model probabilities
     ind_probs = ensemble.predict_individual_proba(X_scaled)
@@ -160,10 +160,10 @@ def run_ablation_benchmark(duration_minutes: float = 60.0, output_dir: str = "do
 
     # Output Console Summary Table
     print("\n" + "=" * 110)
-    print(f"{'Exp':<7} | {'Architecture Configuration':<36} | {'F1 (%)':<8} | {'ROC-AUC':<8} | {'FAR (%)':<8} | {'Latency':<9} | {'Safety'}")
+    print(f"{'Exp':<7} | {'Architecture Configuration':<36} | {'Precision':<9} | {'Recall':<8} | {'F1 (%)':<8} | {'ROC-AUC':<8} | {'FAR (%)':<8} | {'Latency'}")
     print("-" * 110)
     for r in results:
-        print(f"{r['exp_id']:<7} | {r['configuration']:<36} | {r['f1_score']:<8.2f} | {r['roc_auc']:<8.2f} | {r['false_alarm_rate_pct']:<8.3f} | {r['latency_ms']:<6.2f} ms | {r['safety_compliance_pct']:.1f}%")
+        print(f"{r['exp_id']:<7} | {r['configuration']:<36} | {r['precision']:<7.2f}% | {r['recall']:<6.2f}% | {r['f1_score']:<8.2f} | {r['roc_auc']:<8.2f} | {r['false_alarm_rate_pct']:<8.3f} | {r['latency_ms']:<6.2f} ms")
     print("=" * 110)
 
     # Save to JSON
@@ -176,7 +176,7 @@ def run_ablation_benchmark(duration_minutes: float = 60.0, output_dir: str = "do
     with open(md_path, "w", encoding="utf-8") as f:
         f.write("# 🔬 Satellite Health Management — Research Ablation Study Results\n\n")
         f.write("| Experiment | Architecture Configuration | Precision (%) | Recall (%) | F1-Score (%) | ROC-AUC (%) | PR-AUC (%) | False Alarm Rate (%) | Latency (ms) | Safety Compliance |\n")
-        f.write("| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n")
+        f.write("| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n")
         for r in results:
             f.write(f"| **{r['exp_id']}** | {r['configuration']} | {r['precision']:.2f}% | {r['recall']:.2f}% | **{r['f1_score']:.2f}%** | {r['roc_auc']:.2f}% | {r['pr_auc']:.2f}% | {r['false_alarm_rate_pct']:.3f}% | {r['latency_ms']:.2f} ms | **{r['safety_compliance_pct']:.1f}%** |\n")
 

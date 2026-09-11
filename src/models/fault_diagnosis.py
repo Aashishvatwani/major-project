@@ -84,6 +84,13 @@ class FaultDiagnosisClassifier:
         """
         Predicts fault class probabilities and primary diagnosis for a single sample.
         """
+        if anomaly_prob is not None and anomaly_prob < 0.30:
+            return {
+                "primary_fault": "NOMINAL",
+                "diagnosis_confidence": float(1.0 - anomaly_prob),
+                "fault_probabilities": {fc: (float(1.0 - anomaly_prob) if fc == "NOMINAL" else float(anomaly_prob) / 5.0) for fc in FAULT_CLASSES}
+            }
+
         if not self.is_fitted or self.calibrated_model is None:
             return {
                 "primary_fault": "NOMINAL",
@@ -106,13 +113,16 @@ class FaultDiagnosisClassifier:
             best_fault = max(non_nominal_probs, key=non_nominal_probs.get)
             best_fault_prob = non_nominal_probs[best_fault]
 
-            # If anomaly probability is elevated (>0.35) or best fault probability is high (>0.25), choose the specific fault
-            if (anomaly_prob is not None and anomaly_prob >= 0.35 and best_fault_prob >= 0.15) or (best_fault_prob >= 0.30):
+            # If anomaly probability is elevated (>=0.30), choose the specific fault
+            if anomaly_prob is not None and anomaly_prob >= 0.30:
+                top_fault = best_fault
+                confidence = float(best_fault_prob)
+            elif best_fault_prob >= 0.35:
                 top_fault = best_fault
                 confidence = float(best_fault_prob)
             else:
-                top_fault = max(prob_dict, key=prob_dict.get)
-                confidence = float(prob_dict[top_fault])
+                top_fault = "NOMINAL"
+                confidence = float(prob_dict.get("NOMINAL", 0.95))
         except Exception:
             prob_dict = {fc: (1.0 if fc == "NOMINAL" else 0.0) for fc in FAULT_CLASSES}
             top_fault = "NOMINAL"
@@ -165,15 +175,16 @@ class SeverityEstimator:
         physics_risk = float(0.35 * r_temp + 0.25 * r_volt + 0.20 * r_curr + 0.10 * r_imp + 0.10 * r_dtdt)
         risk_score = float(0.60 * anomaly_prob + 0.40 * physics_risk)
 
-        if safety_override or temp >= 65.0 or volt <= 2.20 or curr >= 7.5 or risk_score >= 0.85:
+        if safety_override or temp >= 60.0 or volt <= 2.20 or curr >= 7.5 or risk_score >= 0.85:
             severity = "EMERGENCY"
             risk_score = max(risk_score, 0.85)
-        elif risk_score >= 0.60 or fault_type in ["THERMAL_RUNAWAY", "INTERNAL_SHORT"]:
+        elif (risk_score >= 0.55 or fault_type in ["THERMAL_RUNAWAY", "INTERNAL_SHORT"]) and (anomaly_prob >= 0.30 or physics_risk > 0.40):
             severity = "CRITICAL"
-        elif risk_score >= 0.35 or fault_type != "NOMINAL":
+        elif (risk_score >= 0.35 or fault_type != "NOMINAL") and (anomaly_prob >= 0.30 or physics_risk > 0.25):
             severity = "WARNING"
         else:
             severity = "NOMINAL"
+            risk_score = min(risk_score, 0.10)
 
         return {
             "severity": severity,

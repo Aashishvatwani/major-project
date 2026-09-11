@@ -90,8 +90,10 @@ def init_pipeline():
             enable_hardware=True
         )
 
-        loader = TelemetryDataLoader("data/raw/synthetic_telemetry.csv")
-        df = loader.load_or_generate_dataset(duration_minutes=360.0)
+        from data.synthetic_generator import SatelliteTelemetryGenerator
+        generator = SatelliteTelemetryGenerator()
+        # Generate pure nominal stream baseline so faults only happen when injected
+        df = generator.generate_telemetry_dataset(duration_minutes=360.0, inject_anomalies=False)
         pipeline_instance.stream.set_dataset(df)
 
 
@@ -125,6 +127,13 @@ async def get_dashboard(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
+@app.get("/research")
+@app.get("/rd")
+@app.get("/whitepaper")
+async def get_research_paper(request: Request):
+    return templates.TemplateResponse("research.html", {"request": request})
+
+
 @app.post("/api/inject_fault")
 async def inject_fault_endpoint(req: FaultInjectionRequest):
     global pipeline_instance
@@ -139,7 +148,11 @@ async def clear_fault_endpoint():
     global pipeline_instance
     if pipeline_instance and pipeline_instance.stream:
         pipeline_instance.stream.clear_fault()
-        return {"status": "success", "message": "Fault cleared"}
+        if hasattr(pipeline_instance, "feature_extractor"):
+            pipeline_instance.feature_extractor.reset_stream_buffer()
+        if hasattr(pipeline_instance, "recent_alerts"):
+            pipeline_instance.recent_alerts.clear()
+        return {"status": "success", "message": "Fault cleared and telemetry returned to nominal"}
     return {"status": "error"}
 
 

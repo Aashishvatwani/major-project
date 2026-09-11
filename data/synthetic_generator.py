@@ -1,7 +1,7 @@
 """
 Orbital Mechanics & Satellite Battery Telemetry Synthetic Generator
 Simulates realistic LEO (Low Earth Orbit) orbital thermal-electrical dynamics,
-eclipse transitions, solar charging cycles, and injects verified aerospace failure modes.
+eclipse transitions, solar charging cycles, nominal payload transients, and injects verified aerospace failure modes.
 """
 
 import os
@@ -13,7 +13,7 @@ from typing import Dict, Any, List, Optional, Tuple
 class SatelliteTelemetryGenerator:
     """
     Generates high-fidelity multi-orbit satellite EPS (Electrical Power Subsystem) telemetry
-    with realistic physical battery dynamics and injected orbital failure modes.
+    with realistic physical battery dynamics, nominal payload transients, and progressive orbital failure modes.
     """
 
     def __init__(
@@ -45,12 +45,14 @@ class SatelliteTelemetryGenerator:
         Generates continuous telemetry time-series with realistic physics:
         - Sunlight: Solar panel array generation, battery charging (CC/CV curve), radiative solar heating.
         - Eclipse: Zero solar input, continuous payload power draw, battery discharging, radiative cooling to deep space.
+        - Operational transients: Nominal payload bursts and communications cycles.
+        - Progressive fault dynamics: Realistic non-instantaneous fault inception.
         """
         total_seconds = int(duration_minutes * 60)
         total_samples = int(total_seconds * self.sampling_rate_hz)
 
         timestamps = np.arange(0, total_seconds, self.dt)[:total_samples]
-        orbit_phases = (timestamps % self.orbital_period_sec) / self.orbital_period_sec
+        orbit_ids = (timestamps // self.orbital_period_sec).astype(int)
 
         # Eclipse Indicator (1 = Eclipse shadow, 0 = Direct Sunlight)
         is_eclipse = (timestamps % self.orbital_period_sec) >= self.sunlight_duration_sec
@@ -62,6 +64,7 @@ class SatelliteTelemetryGenerator:
         current_soc = 0.88  # Starting State of Charge (88%)
         anomaly_label = np.zeros(total_samples, dtype=int)
         anomaly_type = ["normal"] * total_samples
+        event_id = np.zeros(total_samples, dtype=int)
 
         base_r_int = 0.045  # 45 mOhm internal resistance
 
@@ -69,28 +72,33 @@ class SatelliteTelemetryGenerator:
             t = timestamps[i]
             eclipse = is_eclipse[i]
 
+            # Simulate occasional nominal payload pulses (e.g. downlink transmitter or reaction wheel spin-up)
+            # These are healthy operations that should NOT trigger false alarms
+            is_nominal_burst = (int(t) % 420 < 15)
+            burst_current = 0.75 if is_nominal_burst else 0.0
+
             if eclipse:
-                # Discharging: payload draws 2.2A - 3.2A
-                load = 2.70 + 0.3 * np.sin(2 * np.pi * t / 300.0) + self.rng.normal(0, 0.04)
+                # Discharging: payload draws 2.2A - 3.2A + nominal burst
+                load = 2.70 + 0.3 * np.sin(2 * np.pi * t / 300.0) + burst_current + self.rng.normal(0, 0.06)
                 current_soc -= (load * self.dt) / (10.0 * 3600.0)  # 10Ah pack
                 i_val = load
-                # Voltage curve: Open Circuit Voltage - I * R_int
+                # Voltage curve: Open Circuit Voltage - I * R_int + realistic measurement noise
                 ocv = 3.30 + 0.85 * current_soc - 0.05 / (current_soc + 0.05)
-                v_val = ocv - (i_val * base_r_int) + self.rng.normal(0, 0.012)
-                # Radiative cooling towards cold space (-5°C)
-                t_val = self.nominal_temp - 12.0 * (1 - np.exp(- (t % self.orbital_period_sec - self.sunlight_duration_sec) / 600.0)) + self.rng.normal(0, 0.15)
+                v_val = ocv - (i_val * base_r_int) + self.rng.normal(0, 0.025)
+                # Radiative cooling towards cold space (-5°C) with realistic sensor noise
+                t_val = self.nominal_temp - 12.0 * (1 - np.exp(- (t % self.orbital_period_sec - self.sunlight_duration_sec) / 600.0)) + self.rng.normal(0, 0.30)
             else:
                 # Charging: solar array provides current
                 solar_gen = 4.20 + 0.4 * np.sin(np.pi * (t % self.orbital_period_sec) / self.sunlight_duration_sec)
-                payload_draw = 1.80 + self.rng.normal(0, 0.03)
+                payload_draw = 1.80 + burst_current + self.rng.normal(0, 0.05)
                 net_charge_current = solar_gen - payload_draw
                 current_soc += (net_charge_current * self.dt) / (10.0 * 3600.0)
                 current_soc = min(current_soc, 0.98)
                 i_val = payload_draw
                 ocv = 3.30 + 0.85 * current_soc
-                v_val = ocv + (net_charge_current * 0.02) + self.rng.normal(0, 0.012)
+                v_val = ocv + (net_charge_current * 0.02) + self.rng.normal(0, 0.025)
                 # Solar heating towards 35°C
-                t_val = self.nominal_temp + 14.0 * (1 - np.exp(- (t % self.orbital_period_sec) / 800.0)) + self.rng.normal(0, 0.15)
+                t_val = self.nominal_temp + 14.0 * (1 - np.exp(- (t % self.orbital_period_sec) / 800.0)) + self.rng.normal(0, 0.30)
 
             current_soc = np.clip(current_soc, 0.05, 1.0)
             soc[i] = current_soc
@@ -98,10 +106,9 @@ class SatelliteTelemetryGenerator:
             current[i] = i_val
             temperature[i] = t_val
 
-        # Inject Fault Scenarios across entire duration regularly
+        # Inject Progressive Aerospace Fault Scenarios
         if inject_anomalies:
-            fault_duration_samples = int(45 * self.sampling_rate_hz)  # 45-second anomaly window
-            # Inject an anomaly every ~6-8 minutes evenly distributed
+            fault_duration_samples = int(60 * self.sampling_rate_hz)  # 60-second progressive anomaly window
             interval_samples = int(7 * 60 * self.sampling_rate_hz)
             num_intervals = total_samples // interval_samples
 
@@ -113,9 +120,10 @@ class SatelliteTelemetryGenerator:
                 "deep_undervoltage_collapse"
             ]
 
+            curr_event_id = 1
             for interval_idx in range(num_intervals):
                 f_type = fault_types[interval_idx % len(fault_types)]
-                offset = self.rng.integers(15, interval_samples - fault_duration_samples - 15)
+                offset = self.rng.integers(20, interval_samples - fault_duration_samples - 20)
                 idx_start = interval_idx * interval_samples + offset
                 idx_end = idx_start + fault_duration_samples
 
@@ -123,48 +131,58 @@ class SatelliteTelemetryGenerator:
                     continue
 
                 anomaly_label[idx_start:idx_end] = 1
+                event_id[idx_start:idx_end] = curr_event_id
+                curr_event_id += 1
 
                 for k in range(idx_start, idx_end):
                     anomaly_type[k] = f_type
                     step_k = k - idx_start
+                    # Normalized progress of fault: 0.0 -> 1.0
+                    progress = (step_k + 1) / fault_duration_samples
+                    # Sigmoidal / exponential escalation proxy
+                    escalation = 1.0 / (1.0 + np.exp(-6.0 * (progress - 0.4)))
 
                     if f_type == "thermal_runaway_precursor":
-                        # Fast accelerating temperature rise + current growth
-                        temperature[k] += 12.0 + 1.25 * step_k + self.rng.normal(0, 0.25)
-                        voltage[k] -= 0.15 + 0.015 * step_k
-                        current[k] += 0.40 + 0.045 * step_k
+                        # Accelerating temperature rise + progressive internal dissipation
+                        temperature[k] += (3.0 + 16.0 * escalation) + self.rng.normal(0, 0.4)
+                        voltage[k] -= (0.05 + 0.28 * escalation) + self.rng.normal(0, 0.02)
+                        current[k] += (0.15 + 0.85 * escalation) + self.rng.normal(0, 0.04)
 
                     elif f_type == "internal_short_circuit":
-                        # Sudden massive current spike + sharp voltage collapse + heat pulse
-                        voltage[k] -= 1.10 + self.rng.normal(0, 0.04)
-                        current[k] += 4.80 + self.rng.normal(0, 0.15)
-                        temperature[k] += 6.0 + 0.45 * step_k
+                        # Micro-short escalation: progressive voltage drop & current surge
+                        voltage[k] -= (0.25 + 0.95 * escalation) + self.rng.normal(0, 0.04)
+                        current[k] += (0.80 + 3.20 * escalation) + self.rng.normal(0, 0.08)
+                        temperature[k] += (1.5 + 8.5 * escalation) + self.rng.normal(0, 0.35)
 
                     elif f_type == "high_impedance_degradation":
-                        # High internal resistance: severe voltage drop under payload load
-                        voltage[k] -= (current[k] * 0.55) + 0.45 + self.rng.normal(0, 0.02)
-                        temperature[k] += 4.0 + 0.22 * step_k
+                        # Progressive electrolyte/collector degradation: voltage sag under load
+                        impedance_bump = 0.15 + 0.65 * escalation
+                        voltage[k] -= (current[k] * impedance_bump) + self.rng.normal(0, 0.03)
+                        temperature[k] += (1.0 + 4.5 * escalation) + self.rng.normal(0, 0.25)
 
                     elif f_type == "sensor_drift_fault":
-                        # Erratic high amplitude sensor oscillation / bias offset
-                        voltage[k] += 1.25 * np.sin(step_k / 2.5) + self.rng.normal(0, 0.15)
-                        current[k] += 1.80 * np.cos(step_k / 2.0)
+                        # Progressive sensor drift + noise oscillation
+                        drift_mag = 0.25 + 1.10 * escalation
+                        voltage[k] += drift_mag * np.sin(step_k / 3.0) + self.rng.normal(0, 0.18)
+                        current[k] += (drift_mag * 0.9) * np.cos(step_k / 2.5) + self.rng.normal(0, 0.15)
 
                     elif f_type == "deep_undervoltage_collapse":
-                        # Voltage dropping below critical discharge threshold
-                        voltage[k] = max(1.95, 2.35 - 0.025 * step_k + self.rng.normal(0, 0.02))
-                        soc[k] = max(0.02, 0.12 - 0.002 * step_k)
-                        temperature[k] -= 0.05 * step_k
+                        # Gradual discharge sag below critical threshold
+                        voltage[k] = max(1.90, voltage[k] - (0.35 + 1.20 * escalation) + self.rng.normal(0, 0.03))
+                        soc[k] = max(0.01, soc[k] - (0.05 + 0.15 * escalation))
+                        temperature[k] -= (0.02 * step_k)
 
         df = pd.DataFrame({
             "timestamp": timestamps,
+            "orbit_id": orbit_ids,
             "voltage": np.round(voltage, 4),
             "current": np.round(current, 4),
             "temperature": np.round(temperature, 2),
             "soc": np.round(soc, 4),
             "is_eclipse": is_eclipse.astype(int),
             "anomaly_label": anomaly_label,
-            "anomaly_type": anomaly_type
+            "anomaly_type": anomaly_type,
+            "event_id": event_id
         })
 
         return df

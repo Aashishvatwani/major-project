@@ -2,7 +2,7 @@
 Comprehensive Model Trainer Pipeline
 Trains Preprocessor, Random Forest, XGBoost, Extra Trees, Soft Voting Ensemble,
 Multi-Class Fault Diagnosis Classifier, and the Reinforcement Learning Adaptive Mitigation Agent
-with rigorous aerospace validation metrics.
+with rigorous aerospace validation metrics and temporal anti-leakage splitting.
 """
 
 import os
@@ -10,7 +10,6 @@ import yaml
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, Tuple, Optional, List
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     roc_auc_score,
     average_precision_score,
@@ -34,7 +33,7 @@ class ModelTrainer:
     """
     End-to-end Trainer orchestrating data ingestion, feature extraction,
     supervised multi-model ensemble fitting, multi-class fault classification,
-    calibration, and RL policy training.
+    calibration, and RL policy training with strict temporal anti-leakage isolation.
     """
 
     def __init__(self, config_path: str = "config/default_config.yaml"):
@@ -69,19 +68,32 @@ class ModelTrainer:
         rl_episodes: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Executes end-to-end training and saves all components.
+        Executes end-to-end training and saves all components using strict out-of-sample temporal splitting.
         """
         os.makedirs(output_dir, exist_ok=True)
         print(">> [1/6] Ingesting & generating telemetry dataset with realistic orbital fault modes...")
         loader = TelemetryDataLoader(data_path="data/raw/synthetic_telemetry.csv")
-        df_raw = loader.load_or_generate_dataset(duration_minutes=duration_minutes)
+        df_raw = loader.load_or_generate_dataset(duration_minutes=duration_minutes, force_regenerate=True)
 
-        print(">> [2/6] Extracting physics and multi-window statistical features...")
-        df_feats = self.feature_extractor.extract_batch_features(df_raw)
+        print(">> [2/6] Performing Temporal Orbit-Aware Split (preventing temporal & rolling feature leakage)...")
+        # Split by orbit_id if available, otherwise chronological time split
+        if "orbit_id" in df_raw.columns and len(df_raw["orbit_id"].unique()) > 1:
+            orbits = sorted(df_raw["orbit_id"].unique())
+            split_orbit = orbits[int(len(orbits) * 0.75)]
+            train_raw = df_raw[df_raw["orbit_id"] < split_orbit].copy().reset_index(drop=True)
+            test_raw = df_raw[df_raw["orbit_id"] >= split_orbit].copy().reset_index(drop=True)
+            print(f"   Orbits for Training: {list(train_raw['orbit_id'].unique())} ({len(train_raw)} frames)")
+            print(f"   Orbits for Testing (Unseen Out-of-Sample): {list(test_raw['orbit_id'].unique())} ({len(test_raw)} frames)")
+        else:
+            split_idx = int(len(df_raw) * 0.75)
+            train_raw = df_raw.iloc[:split_idx].copy().reset_index(drop=True)
+            test_raw = df_raw.iloc[split_idx:].copy().reset_index(drop=True)
+            print(f"   Chronological Split: {len(train_raw)} train frames / {len(test_raw)} test frames")
 
-        # Stratified Train / Test split
-        strat_col = df_feats["anomaly_label"] if len(df_feats["anomaly_label"].unique()) > 1 else None
-        train_df, test_df = train_test_split(df_feats, test_size=0.25, random_state=42, stratify=strat_col)
+        # Independent feature extraction on separate splits to prevent lookahead/rolling window leakage
+        print(">> Extracting features independently on Train and Test partitions...")
+        train_df = self.feature_extractor.extract_batch_features(train_raw)
+        test_df = self.feature_extractor.extract_batch_features(test_raw)
 
         y_train = train_df["anomaly_label"].values
         y_test = test_df["anomaly_label"].values
@@ -89,19 +101,19 @@ class ModelTrainer:
         y_type_train = train_df.get("anomaly_type", pd.Series(["normal"] * len(train_df))).values
         y_type_test = test_df.get("anomaly_type", pd.Series(["normal"] * len(test_df))).values
 
-        print(">> [3/6] Fitting robust scaler and preprocessing...")
+        print(">> [3/6] Fitting robust scaler strictly on training partition...")
         X_train_scaled = self.preprocessor.fit_transform(train_df)
         X_test_scaled = self.preprocessor.transform(test_df)
 
         print(">> [4/6] Training Random Forest, XGBoost & Extra Trees Ensemble with Probability Calibration...")
         self.ensemble.fit(X_train_scaled, y_train)
 
-        # Evaluate Supervised Binary Models
+        # Evaluate Supervised Binary Models on unseen test partition
         probs_train = self.ensemble.predict_proba(X_train_scaled)
         probs_test = self.ensemble.predict_proba(X_test_scaled)
         ind_probs_test = self.ensemble.predict_individual_proba(X_test_scaled)
 
-        metrics = self._evaluate_models(y_test, probs_test, ind_probs_test)
+        metrics = self._evaluate_models(test_df, probs_test, ind_probs_test)
 
         print(">> [5/6] Training Multi-Class Fault Taxonomy Diagnosis Classifier...")
         self.fault_classifier.fit(X_train_scaled, y_type_train)
@@ -134,23 +146,29 @@ class ModelTrainer:
         }
 
         print("=" * 65)
-        print(" SATELLITE HITL PIPELINE TRAINING COMPLETE")
+        print(" SATELLITE HITL PIPELINE TRAINING COMPLETE (REALISTIC BENCHMARKS)")
         print(f" Ensemble Test ROC-AUC: {metrics['ensemble']['roc_auc']:.4f}")
         print(f" Ensemble Test PR-AUC:   {metrics['ensemble']['pr_auc']:.4f}")
         print(f" Ensemble Test F1-Score: {metrics['ensemble']['f1']:.4f}")
         print(f" Ensemble Precision:     {metrics['ensemble']['precision']:.4f}")
         print(f" Ensemble Recall:        {metrics['ensemble']['recall']:.4f}")
+        print(f" Mean Time-to-Detect:    {metrics['ensemble']['mean_time_to_detect_sec']:.2f} s")
+        print(f" False Alarms / Orbit Hr:{metrics['ensemble']['false_alarms_per_hour']:.2f}")
         print("=" * 65)
 
         return results
 
     def _evaluate_models(
         self,
-        y_true: np.ndarray,
+        test_df: pd.DataFrame,
         ens_probs: np.ndarray,
         ind_probs: Dict[str, np.ndarray]
     ) -> Dict[str, Any]:
-        """Calculates detailed metrics for each model and the ensemble"""
+        """Calculates frame-level and event-level metrics for each model and the ensemble"""
+        y_true = test_df["anomaly_label"].values
+        events = test_df.get("event_id", pd.Series([0] * len(test_df))).values
+        timestamps = test_df.get("timestamp", pd.Series(np.arange(len(test_df)))).values
+
         metrics = {}
         models_to_eval = {
             "random_forest": ind_probs["rf"],
@@ -158,6 +176,9 @@ class ModelTrainer:
             "extra_trees": ind_probs["extra_trees"],
             "ensemble": ens_probs
         }
+
+        # Calculate duration in hours for FAR/hr
+        total_duration_hours = max((timestamps[-1] - timestamps[0]) / 3600.0, 0.25) if len(timestamps) > 1 else 1.0
 
         for name, probs in models_to_eval.items():
             preds = (probs >= 0.50).astype(int)
@@ -169,6 +190,27 @@ class ModelTrainer:
             brier = brier_score_loss(y_true, probs)
             cm = confusion_matrix(y_true, preds).tolist()
 
+            # Event-level detection latency calculation
+            detection_latencies = []
+            unique_events = [e for e in np.unique(events) if e > 0]
+            for ev in unique_events:
+                ev_mask = (events == ev)
+                ev_indices = np.where(ev_mask)[0]
+                if len(ev_indices) == 0:
+                    continue
+                start_idx = ev_indices[0]
+                detected_indices = np.where(ev_mask & (preds == 1))[0]
+                if len(detected_indices) > 0:
+                    first_detect_idx = detected_indices[0]
+                    t_detect = float(timestamps[first_detect_idx] - timestamps[start_idx])
+                    detection_latencies.append(max(t_detect, 0.0))
+
+            mean_ttd = float(np.mean(detection_latencies)) if detection_latencies else 0.0
+
+            # False alarms count outside events
+            false_positives = np.sum((y_true == 0) & (preds == 1))
+            far_per_hour = float(false_positives / total_duration_hours)
+
             metrics[name] = {
                 "roc_auc": float(roc),
                 "pr_auc": float(pr),
@@ -176,7 +218,9 @@ class ModelTrainer:
                 "precision": float(prec),
                 "recall": float(rec),
                 "brier_score": float(brier),
-                "confusion_matrix": cm
+                "confusion_matrix": cm,
+                "mean_time_to_detect_sec": mean_ttd,
+                "false_alarms_per_hour": far_per_hour
             }
 
         return metrics

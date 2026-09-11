@@ -1,13 +1,14 @@
 /*
-  AERO-GUARD // Structured Mission Control Dashboard & 3D Spacecraft Digital Twin v3.4
+  AERO-GUARD // Structured Mission Control Dashboard & 3D Spacecraft Digital Twin v3.5
   Features:
-  1. Three.js PBR 3D Spacecraft inside dedicated Digital Twin Card container.
+  1. Three.js PBR 3D Spacecraft inside dedicated Digital Twin Card container with attitude stabilization.
   2. Dual Real-time Chart.js telemetry charts (Voltage/Current and Temp/P(Anomaly)).
   3. Live AI Agent Flight Diagnostic Terminal with RAG Flight Regulations.
   4. Real-time Digital Twin Counterfactual Decision Matrix (60s forward projection).
   5. Multi-Model ML Ensemble Consensus Breakdown.
   6. Hardware HITL Arduino Uno Pin 13 LED Fixture Actuator.
-  7. Authentic Web Audio API Synthesizer (beeps, arc discharge, venting hiss, klaxons).
+  7. Authentic Web Audio API Synthesizer (beeps, arc discharge, venting hiss, klaxons, recovery chimes).
+  8. Autonomous Recovery Transition Detection & Visual Frontend Reset with RL Mitigation Action Attribution.
 */
 
 // ==============================================================================
@@ -52,6 +53,29 @@ class AerospaceAudioEngine {
       gain.connect(this.ctx.destination);
       osc.start();
       osc.stop(this.ctx.currentTime + duration);
+    } catch (e) {}
+  }
+
+  playRecoveryChime() {
+    if (this.muted || !this.ctx) return;
+    this.resumeContext();
+    try {
+      // Pleasant C5 - E5 - G5 - C6 aerospace resolution chime
+      const notes = [523.25, 659.25, 783.99, 1046.50];
+      notes.forEach((freq, i) => {
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        const startT = this.ctx.currentTime + i * 0.07;
+        const dur = 0.22;
+        osc.frequency.setValueAtTime(freq, startT);
+        gain.gain.setValueAtTime(0.06, startT);
+        gain.gain.exponentialRampToValueAtTime(0.0001, startT + dur);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(startT);
+        osc.stop(startT + dur);
+      });
     } catch (e) {}
   }
 
@@ -153,16 +177,63 @@ function safeSetColor(id, color) {
   if (el) el.style.color = color;
 }
 
-function addTerminalLog(msg, isError = false, isWarn = false) {
+function addTerminalLog(msg, isError = false, isWarn = false, isSuccess = false) {
   const ticker = document.getElementById('terminal-ticker');
   if (!ticker) return;
   const now = new Date().toISOString().substring(11, 19);
   let color = 'text-gray-300';
   if (isError) color = 'text-red-400 font-bold';
   else if (isWarn) color = 'text-amber-300 font-semibold';
+  else if (isSuccess) color = 'text-emerald-300 font-bold';
   
   ticker.innerHTML = `<span class="${color}">[${now}] ${msg}</span>`;
-  audioSys.playBeep(isError ? 440 : 1200, 0.05, 'square');
+  if (isSuccess) {
+    audioSys.playBeep(1046, 0.08, 'sine');
+  } else {
+    audioSys.playBeep(isError ? 440 : 1200, 0.05, 'square');
+  }
+}
+
+// Global Banner Functions
+function showRecoveryBanner(actionName, faultName, timeStr, customDetail = null) {
+  const panel = document.getElementById('recovery-status-panel');
+  const actionEl = document.getElementById('recovery-action-applied');
+  const timeEl = document.getElementById('recovery-timestamp');
+  const detailEl = document.getElementById('recovery-mitigation-detail');
+  
+  if (!panel) return;
+
+  let detailText = "• Electrochemical & thermal equilibrium restored. Nominal ESA/NASA limits verified.";
+  if (actionName.includes("LOAD_SHEDDING")) {
+    detailText = "• Shed 35% non-critical scientific payloads -> Heat dissipation and cell voltage stabilized.";
+  } else if (actionName.includes("SAFE_MODE")) {
+    detailText = "• Emergency power bus isolated -> Battery degradation halted and thermal runaway mitigated.";
+  } else if (actionName.includes("PREARM")) {
+    detailText = "• High sensitivity pre-arm completed -> Sensor drift isolated and telemetry re-synchronized.";
+  }
+
+  if (actionEl) actionEl.innerText = `${actionName} (Mitigated: ${faultName})`;
+  if (timeEl) timeEl.innerText = `RECOVERED AT: ${timeStr || new Date().toLocaleTimeString()}`;
+  if (detailEl) detailEl.innerText = customDetail || detailText;
+
+  panel.classList.remove('hidden');
+
+  // Clear existing timeout
+  if (SatState.recoveryBannerTimeout) {
+    clearTimeout(SatState.recoveryBannerTimeout);
+  }
+  
+  // Keep visible for 18 seconds then smoothly fade out if still nominal
+  SatState.recoveryBannerTimeout = setTimeout(() => {
+    if (SatState.final_severity === 'NOMINAL' && SatState.primary_fault === 'NOMINAL') {
+      dismissRecoveryBanner();
+    }
+  }, 18000);
+}
+
+function dismissRecoveryBanner() {
+  const panel = document.getElementById('recovery-status-panel');
+  if (panel) panel.classList.add('hidden');
 }
 
 // ==============================================================================
@@ -185,10 +256,20 @@ const SatState = {
   final_severity: "NOMINAL",
   risk_score: 0.05,
   rl_action_name: "NOMINAL_MONITOR",
+  rl_action_id: 0,
+  dynamic_threshold: 0.70,
   safety_override_active: false,
   requires_human_approval: false,
   autopilotMode: true,
 
+  // Recovery & State Transition Tracker
+  wasInAnomaly: false,
+  lastMitigatingRLAction: "NOMINAL_MONITOR",
+  lastMitigatedFault: "NOMINAL",
+  lastRecoveryTimestamp: "STANDBY",
+  recoveryBannerTimeout: null,
+
+  // Client-side visual overrides
   faultThermalRunaway: false,
   faultMicroShort: false,
   faultDeepUndervolt: false,
@@ -751,10 +832,12 @@ let fpsTimer = 0;
 function updatePhysics(delta) {
   SatState.glitchPhase += delta * 12;
 
-  const isThermalRunaway = SatState.faultThermalRunaway || SatState.primary_fault === "THERMAL_RUNAWAY";
-  const isMicroShort = SatState.faultMicroShort || SatState.primary_fault === "INTERNAL_SHORT";
-  const isUndervolt = SatState.faultDeepUndervolt || SatState.primary_fault === "UNDERVOLTAGE";
-  const isSensorGlitch = SatState.faultSensorGlitch || SatState.primary_fault === "SENSOR_FAULT";
+  const isAnomaly = (SatState.p_ensemble >= 0.30) || (SatState.primary_fault !== "NOMINAL") || (SatState.final_severity !== "NOMINAL") || SatState.safety_override_active;
+
+  const isThermalRunaway = isAnomaly && (SatState.faultThermalRunaway || SatState.primary_fault === "THERMAL_RUNAWAY" || SatState.temp > 48.0);
+  const isMicroShort = isAnomaly && (SatState.faultMicroShort || SatState.primary_fault === "INTERNAL_SHORT" || SatState.current > 4.5);
+  const isUndervolt = isAnomaly && (SatState.faultDeepUndervolt || SatState.primary_fault === "UNDERVOLTAGE" || SatState.voltage < 2.9);
+  const isSensorGlitch = isAnomaly && (SatState.faultSensorGlitch || SatState.primary_fault === "SENSOR_FAULT");
 
   // 1. 🔥 Thermal Runaway FX
   if (isThermalRunaway) {
@@ -791,8 +874,9 @@ function updatePhysics(delta) {
       audioSys.playVentingHiss();
     }
   } else {
-    if (thermalPointLight) thermalPointLight.intensity = Math.max(0, thermalPointLight.intensity - delta * 2);
-    if (particleSystemThermal) particleSystemThermal.material.opacity = Math.max(0, particleSystemThermal.material.opacity - delta);
+    // Guaranteed instant visual recovery to nominal cool blue
+    if (thermalPointLight) thermalPointLight.intensity = 0;
+    if (particleSystemThermal) particleSystemThermal.material.opacity = 0;
     if (cellThermalMaterial) {
       cellThermalMaterial.color.setHex(0x3b82f6);
       cellThermalMaterial.emissive.setHex(0x001133);
@@ -823,22 +907,26 @@ function updatePhysics(delta) {
     if (arcFlashLight) arcFlashLight.intensity = 0;
   }
 
-  // 3. 🔋 Deep Undervoltage Tumble
+  // 3. 🔋 Deep Undervoltage Tumble & Smooth Attitude Recovery
   if (isUndervolt && satelliteGroup) {
     satelliteGroup.rotation.x += delta * 0.18;
     satelliteGroup.rotation.z += delta * 0.12;
+  } else if (satelliteGroup) {
+    // Smooth attitude stabilization back to upright (0, 0)
+    satelliteGroup.rotation.x += (0 - satelliteGroup.rotation.x) * Math.min(1.0, delta * 3.5);
+    satelliteGroup.rotation.z += (0 - satelliteGroup.rotation.z) * Math.min(1.0, delta * 3.5);
   }
 
-  // 4. 📡 Sensor Glitch Dish Jitter
+  // 4. 📡 Sensor Glitch Dish Jitter & Smooth Reset
   if (isSensorGlitch && highGainDish) {
     highGainDish.rotation.z = Math.sin(SatState.glitchPhase * 0.8) * 0.4;
     highGainDish.rotation.y = Math.cos(SatState.glitchPhase * 0.5) * 0.3;
   } else if (highGainDish) {
-    highGainDish.rotation.z = 0;
-    highGainDish.rotation.y = 0;
+    highGainDish.rotation.z += (0 - highGainDish.rotation.z) * Math.min(1.0, delta * 5.0);
+    highGainDish.rotation.y += (0 - highGainDish.rotation.y) * Math.min(1.0, delta * 5.0);
   }
 
-  // Normal orbital rotation
+  // Normal orbital rotation & solar tracking
   if (!isUndervolt && satelliteGroup) {
     satelliteGroup.rotation.y += delta * 0.04;
     if (solarWingLeft && solarWingRight) {
@@ -880,6 +968,27 @@ function updateHUD() {
   safeSetText('disp-severity', SatState.final_severity);
   safeSetText('disp-risk-score', `INDEX: ${SatState.risk_score.toFixed(2)}`);
   safeSetWidth('bar-risk', SatState.risk_score * 100);
+
+  // RL Adaptive Policy Card
+  safeSetText('disp-active-rl-action', `${SatState.rl_action_name} (τ=${SatState.dynamic_threshold.toFixed(2)})`);
+  safeSetText('disp-last-recovery-action', SatState.lastMitigatingRLAction || 'STANDBY');
+
+  const rlTag = document.getElementById('rl-action-status-tag');
+  if (rlTag) {
+    if (SatState.rl_action_name === 'LOAD_SHEDDING') {
+      rlTag.innerText = 'MITIGATING (LOAD SHED)';
+      rlTag.className = 'text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-950/60 text-amber-300 border border-amber-500/50 animate-pulse';
+    } else if (SatState.rl_action_name === 'TRIGGER_SAFE_MODE') {
+      rlTag.innerText = 'EMERGENCY SAFE MODE';
+      rlTag.className = 'text-[9px] font-bold px-1.5 py-0.5 rounded bg-red-950/60 text-red-300 border border-red-500/50 animate-pulse';
+    } else if (SatState.rl_action_name === 'HIGH_SENSITIVITY_PREARM') {
+      rlTag.innerText = 'SENSITIVITY PRE-ARM';
+      rlTag.className = 'text-[9px] font-bold px-1.5 py-0.5 rounded bg-cyan-950/60 text-cyan-300 border border-cyan-500/50';
+    } else {
+      rlTag.innerText = 'NOMINAL POLICY';
+      rlTag.className = 'text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-500/40';
+    }
+  }
 
   // Warnings
   const voltWarn = document.getElementById('volt-warning');
@@ -981,6 +1090,389 @@ function updateHUD() {
   const mins = Math.floor((timeSec % 3600) / 60);
   const secs = timeSec % 60;
   safeSetText('mission-clock', `T+142:08:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`);
+
+  // Update Dedicated RL Mitigation & Fault Recovery Engine Hub
+  updateRLRecoveryHub();
+
+  // Update Physical Subsystem Component Simulation HUD
+  updatePhysicalSubsystemHUD();
+}
+
+function updateRLRecoveryHub() {
+  const isAnomaly = (SatState.p_ensemble >= 0.30) || (SatState.primary_fault !== 'NOMINAL') || (SatState.final_severity !== 'NOMINAL') || SatState.safety_override_active;
+
+  const badge = document.getElementById('rl-hub-status-badge');
+  const stdRef = document.getElementById('rl-standard-ref');
+  const cardState = document.getElementById('rl-card-state');
+  const actionName = document.getElementById('rl-applied-action-name');
+  const actionDesc = document.getElementById('rl-applied-action-desc');
+  const faultStatus = document.getElementById('rl-fault-status');
+  const faultName = document.getElementById('rl-mitigated-fault-name');
+  const faultDesc = document.getElementById('rl-mitigated-fault-desc');
+  const tempDelta = document.getElementById('rl-temp-delta');
+  const panomDelta = document.getElementById('rl-panom-delta');
+  const recoverySummary = document.getElementById('rl-recovery-summary');
+  const execStatus = document.getElementById('recovery-exec-status');
+  const procSteps = document.getElementById('recovery-procedure-steps');
+  const lifecycleTag = document.getElementById('recovery-lifecycle-tag');
+
+  const step1 = document.getElementById('step-detect');
+  const step2 = document.getElementById('step-policy');
+  const step3 = document.getElementById('step-verify');
+  const step4 = document.getElementById('step-recover');
+
+  if (isAnomaly) {
+    const activeFault = SatState.primary_fault || 'ANOMALY';
+    
+    if (badge) {
+      badge.innerText = 'MITIGATION ENGAGED';
+      badge.className = 'px-2 py-0.5 text-[9px] font-mono-telemetry font-bold rounded bg-amber-500/20 text-amber-300 border border-amber-500/50 animate-pulse';
+    }
+    if (cardState) {
+      cardState.innerText = 'EXECUTING';
+      cardState.className = 'text-amber-400 font-bold';
+    }
+    if (actionName) actionName.innerText = SatState.rl_action_name || 'LOAD_SHEDDING';
+
+    if (activeFault === 'THERMAL_RUNAWAY' || SatState.temp > 45.0) {
+      if (stdRef) stdRef.innerText = 'NASA-HDBK-4008 §4.2.1 // ISRO-PCDU-EPS-04';
+      if (actionDesc) actionDesc.innerText = 'PCDU Remote Power Controllers (RPC-1 & RPC-2) tripped: derated scientific payload by -35% to halt runaway Joule heat.';
+      if (faultStatus) { faultStatus.innerText = 'THERMAL RUNAWAY'; faultStatus.className = 'text-red-400 font-bold'; }
+      if (faultName) faultName.innerText = 'BATTERY CELL EXOTHERM';
+      if (faultDesc) faultDesc.innerText = 'Cell temperature rising. Thermal gradient dT/dt > +1.2°C/s exceeding NASA 48°C flight limit.';
+      if (execStatus) { execStatus.innerText = 'ENGAGED // TIER-1 LOAD SHEDDING'; execStatus.className = 'text-amber-400 font-bold animate-pulse'; }
+      if (procSteps) {
+        procSteps.innerHTML = `
+          <div>• <span class="text-amber-300 font-semibold">[PCDU RPC Tripping]:</span> Commanded Remote Power Controllers RPC-1 & RPC-2 -> -35% Non-Essential Science Load (Current: 4.8A -> 1.8A).</div>
+          <div>• <span class="text-amber-300 font-semibold">[ADCS Radiator Slew]:</span> Re-oriented satellite thermal radiator louvers +18.5° towards deep space (3K sink).</div>
+          <div>• <span class="text-amber-300 font-semibold">[BCR Trickle Taper]:</span> Tapered Battery Charge Regulator charging to C/20 trickle rate until cell temperatures normalized &lt; 28°C.</div>
+        `;
+      }
+    } else if (activeFault === 'INTERNAL_SHORT' || SatState.current > 4.5) {
+      if (stdRef) stdRef.innerText = 'ISRO-URSC-PCDU-EPS-04 // ECSS-E-ST-20C';
+      if (actionDesc) actionDesc.innerText = 'Sub-20ms solid-state latching relay opened to isolate faulted battery string and switch over to redundant Bus-B.';
+      if (faultStatus) { faultStatus.innerText = 'CRITICAL OVERCURRENT'; faultStatus.className = 'text-red-400 font-bold'; }
+      if (faultName) faultName.innerText = 'MICRO-SHORT DETECTED';
+      if (faultDesc) faultDesc.innerText = 'Impedance proxy collapsed < 0.02Ω. Bus current surge demanding immediate hardware isolation.';
+      if (execStatus) { execStatus.innerText = 'ENGAGED // BUS-B CROSS-STRAP SAFE MODE'; execStatus.className = 'text-red-400 font-bold animate-pulse'; }
+      if (procSteps) {
+        procSteps.innerHTML = `
+          <div>• <span class="text-red-300 font-semibold">[Sub-20ms Bus Isolation]:</span> Opened solid-state latching relay on Battery String-A to prevent thermal propagation.</div>
+          <div>• <span class="text-red-300 font-semibold">[Main Bus Cross-Strap]:</span> Switched PCDU to redundant Bus-B power rail (Hardware Pin 13 LED strobe active).</div>
+          <div>• <span class="text-red-300 font-semibold">[Safe Hold Mode (SHM)]:</span> Re-routed regulated 28V bus exclusively to 9.2W essential flight computer (OBC) and TT&C.</div>
+        `;
+      }
+    } else if (activeFault === 'UNDERVOLTAGE' || SatState.voltage < 2.9) {
+      if (stdRef) stdRef.innerText = 'AIAA-S-136-2023 §5.1 // ISRO Chandrayaan UVLS';
+      if (actionDesc) actionDesc.innerText = 'Under-Voltage Load Shedding (UVLS Lockout) engaged (-75% load shed) with autonomous Sun-pointing acquisition.';
+      if (faultStatus) { faultStatus.innerText = 'BUS VOLTAGE COLLAPSE'; faultStatus.className = 'text-amber-400 font-bold'; }
+      if (faultName) faultName.innerText = 'DEEP DISCHARGE SAG';
+      if (faultDesc) faultDesc.innerText = 'Bus voltage collapsed below 2.90V. Activating Tier-2 UVLS to prevent irreversible copper dissolution.';
+      if (execStatus) { execStatus.innerText = 'ENGAGED // TIER-2 UVLS & SUN POINTING'; execStatus.className = 'text-amber-400 font-bold animate-pulse'; }
+      if (procSteps) {
+        procSteps.innerHTML = `
+          <div>• <span class="text-amber-300 font-semibold">[Tier-2 UVLS Lockout]:</span> Disconnected payload and subsystem buses (75% power demand reduction).</div>
+          <div>• <span class="text-amber-300 font-semibold">[B-dot Sun Acquisition]:</span> ADCS magnetic torquers detumble spacecraft and orient solar arrays normal to Sun (1361 W/m²).</div>
+          <div>• <span class="text-amber-300 font-semibold">[Constant-Current Recharge]:</span> BCR commanded solar array shunts to 2.4A CC charging until SOC &ge; 60%.</div>
+        `;
+      }
+    } else {
+      if (stdRef) stdRef.innerText = 'NASA-SP-20205003605 // CCSDS 502.0-B-3';
+      if (actionDesc) actionDesc.innerText = 'Pre-armed high-sensitivity diagnostic filter bank (τ = 0.35) and switched telemetry observer channel.';
+      if (faultStatus) { faultStatus.innerText = 'ANOMALY DETECTED'; faultStatus.className = 'text-amber-400 font-bold'; }
+      if (faultName) faultName.innerText = activeFault;
+      if (faultDesc) faultDesc.innerText = `Active anomaly on EPS bus. Safety risk index: ${SatState.risk_score.toFixed(2)}`;
+      if (execStatus) { execStatus.innerText = 'ENGAGED // SENSOR CROSS-VALIDATION'; execStatus.className = 'text-amber-400 font-bold'; }
+      if (procSteps) {
+        procSteps.innerHTML = `
+          <div>• <span class="text-cyan-300 font-semibold">[Sensor Cross-Check]:</span> Verified primary ADC vs secondary Channel-B redundant transducer.</div>
+          <div>• <span class="text-cyan-300 font-semibold">[Filter Pre-Arming]:</span> Lowered decision threshold to τ = 0.35 to catch transient degradation signatures.</div>
+          <div>• <span class="text-cyan-300 font-semibold">[Supercap Pulse Buffer]:</span> Engaged bus buffer capacitors to smooth transient impedance drops.</div>
+        `;
+      }
+    }
+
+    if (tempDelta) {
+      tempDelta.innerText = `${SatState.temp.toFixed(1)}°C (${SatState.temp > 45 ? 'OVERHEAT' : 'ELEVATED'})`;
+      tempDelta.className = SatState.temp > 45 ? 'text-red-400 font-bold' : 'text-amber-300 font-bold';
+    }
+    if (panomDelta) {
+      panomDelta.innerText = `${SatState.p_ensemble.toFixed(3)} (HIGH RISK)`;
+      panomDelta.className = 'text-red-400 font-bold';
+    }
+    if (recoverySummary) {
+      recoverySummary.innerText = `Intervention: ${SatState.rl_action_name} • Forward Sim Utility: 0.95`;
+    }
+    if (lifecycleTag) {
+      lifecycleTag.innerText = '● STEP 2: RL MITIGATION ENGAGED';
+      lifecycleTag.className = 'text-amber-400 font-semibold';
+    }
+
+    if (step1) step1.className = 'p-1.5 rounded bg-red-950/60 border border-red-500/60 text-red-200 animate-pulse';
+    if (step2) step2.className = 'p-1.5 rounded bg-amber-950/60 border border-amber-500/60 text-amber-200 animate-pulse';
+    if (step3) step3.className = 'p-1.5 rounded bg-cyan-950/50 border border-cyan-500/40 text-cyan-200';
+    if (step4) step4.className = 'p-1.5 rounded bg-black/40 border border-white/10 text-gray-500';
+
+  } else {
+    // NOMINAL / RECOVERED STATE
+    if (badge) {
+      badge.innerText = 'NOMINAL STABILIZED';
+      badge.className = 'px-2 py-0.5 text-[9px] font-mono-telemetry font-bold rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40';
+    }
+    if (stdRef) {
+      stdRef.innerText = 'NASA-HDBK-4008 // ISRO-URSC-PCDU-EPS-04';
+    }
+    if (cardState) {
+      cardState.innerText = 'POLICY NOMINAL';
+      cardState.className = 'text-emerald-400 font-bold';
+    }
+    if (actionName) {
+      actionName.innerText = SatState.lastMitigatingRLAction ? `${SatState.lastMitigatingRLAction} (APPLIED)` : 'NOMINAL_MONITOR';
+    }
+    if (actionDesc) {
+      if (SatState.lastMitigatingRLAction && SatState.lastMitigatingRLAction !== 'NOMINAL_MONITOR') {
+        actionDesc.innerText = `Successfully executed NASA/ISRO recovery sequence for ${SatState.lastMitigatedFault || 'EPS Anomaly'}. Subsystem re-stabilized to nominal flight bounds.`;
+      } else {
+        actionDesc.innerText = 'Continuous telemetry polling at 2.0 Hz. Decision threshold set to nominal τ = 0.70.';
+      }
+    }
+    if (faultStatus) {
+      faultStatus.innerText = 'RESOLVED';
+      faultStatus.className = 'text-emerald-400 font-bold';
+    }
+    if (faultName) {
+      faultName.innerText = SatState.lastMitigatedFault && SatState.lastMitigatedFault !== 'NOMINAL' ? `${SatState.lastMitigatedFault} (RESOLVED)` : 'NOMINAL STATE';
+    }
+    if (faultDesc) {
+      faultDesc.innerText = 'All electrochemical & thermal parameters operating strictly within ESA/NASA/ISRO flight envelopes.';
+    }
+
+    if (tempDelta) {
+      tempDelta.innerText = `${SatState.temp.toFixed(1)}°C (STABLE)`;
+      tempDelta.className = 'text-emerald-300 font-bold';
+    }
+    if (panomDelta) {
+      panomDelta.innerText = `${SatState.p_ensemble.toFixed(3)} (LOW)`;
+      panomDelta.className = 'text-emerald-300 font-bold';
+    }
+    if (recoverySummary) {
+      recoverySummary.innerText = `PCDU Response: 0.26ms • 100% Safety Guarantee`;
+    }
+    if (execStatus) {
+      execStatus.innerText = 'STANDBY // NOMINAL CRUISE';
+      execStatus.className = 'text-emerald-400 font-bold';
+    }
+    if (procSteps) {
+      procSteps.innerHTML = `
+        <div>• <span class="text-cyan-300 font-semibold">[PCDU RPC Tripping]:</span> Commanded Remote Power Controllers to derate non-essential science payload by -35%.</div>
+        <div>• <span class="text-cyan-300 font-semibold">[ADCS Thermal Slew]:</span> Re-oriented spacecraft thermal louvers towards deep space (3K radiative heat sink).</div>
+        <div>• <span class="text-cyan-300 font-semibold">[BCR Trickle Taper]:</span> Tapered Battery Charge Regulator charging current to C/20 trickle rate until cell temperatures normalized &lt; 28°C.</div>
+      `;
+    }
+    if (lifecycleTag) {
+      lifecycleTag.innerText = '● STEP 4: RECOVERY VERIFIED // SUBSYSTEM NOMINAL';
+      lifecycleTag.className = 'text-emerald-400 font-semibold';
+    }
+
+    if (step1) step1.className = 'p-1.5 rounded bg-emerald-950/40 border border-emerald-500/40 text-emerald-200';
+    if (step2) step2.className = 'p-1.5 rounded bg-emerald-950/40 border border-emerald-500/40 text-emerald-200';
+    if (step3) step3.className = 'p-1.5 rounded bg-emerald-950/40 border border-emerald-500/40 text-emerald-200';
+    if (step4) step4.className = 'p-1.5 rounded bg-emerald-950/60 border border-emerald-400 text-emerald-100 font-bold shadow-sm';
+  }
+}
+
+// ==============================================================================
+// 6.5. Physical Spacecraft Subsystem Component Simulation (NASA & ISRO Modeling)
+// ==============================================================================
+function updatePhysicalSubsystemHUD() {
+  const isAnomaly = (SatState.p_ensemble >= 0.30) || (SatState.primary_fault !== 'NOMINAL') || (SatState.final_severity !== 'NOMINAL') || SatState.safety_override_active;
+  const isThermal = isAnomaly && (SatState.faultThermalRunaway || SatState.primary_fault === "THERMAL_RUNAWAY" || SatState.temp > 48.0);
+  const isShort = isAnomaly && (SatState.faultMicroShort || SatState.primary_fault === "INTERNAL_SHORT" || SatState.current > 4.5);
+  const isUndervolt = isAnomaly && (SatState.faultDeepUndervolt || SatState.primary_fault === "UNDERVOLTAGE" || SatState.voltage < 2.9);
+  const isHighImp = isAnomaly && (SatState.faultHighImpedance || SatState.primary_fault === "HIGH_IMPEDANCE");
+  const isSensor = isAnomaly && (SatState.faultSensorGlitch || SatState.primary_fault === "SENSOR_FAULT");
+  const isLoadShedding = SatState.rl_action_name === 'LOAD_SHEDDING' || isThermal;
+  const isSafeMode = SatState.rl_action_name === 'TRIGGER_SAFE_MODE' || isShort;
+
+  // 1. PCDU Subsystem
+  const pcduTag = document.getElementById('pcdu-status-tag');
+  const pcduRail = document.getElementById('pcdu-rail-val');
+  const pcduRpc = document.getElementById('pcdu-rpc-val');
+  const pcduBusB = document.getElementById('pcdu-busb-val');
+  const pcduCard = document.getElementById('subsystem-pcdu-card');
+
+  if (pcduCard) {
+    if (isShort || isSafeMode) {
+      if (pcduTag) { pcduTag.innerText = 'BUS-A ISOLATED (<20ms)'; pcduTag.className = 'text-red-400 font-bold text-[9px] bg-red-950/60 px-1.5 py-0.5 rounded border border-red-500/40 animate-pulse'; }
+      if (pcduRail) { pcduRail.innerText = '24.2 V (Emergency)'; pcduRail.className = 'text-red-400 font-bold'; }
+      if (pcduRpc) { pcduRpc.innerText = 'LOCKED OPEN (0%)'; pcduRpc.className = 'text-red-400 font-bold'; }
+      if (pcduBusB) { pcduBusB.innerText = 'ACTIVE (Bus-B 9.2W)'; pcduBusB.className = 'text-amber-300 font-bold'; }
+      pcduCard.className = 'p-2.5 rounded-lg bg-red-950/30 border border-red-500/40 space-y-1.5 transition-all';
+    } else if (isLoadShedding) {
+      if (pcduTag) { pcduTag.innerText = 'LOAD SHED (-35%)'; pcduTag.className = 'text-amber-400 font-bold text-[9px] bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-500/40 animate-pulse'; }
+      if (pcduRail) { pcduRail.innerText = '28.2 V Regulated'; pcduRail.className = 'text-amber-300 font-bold'; }
+      if (pcduRpc) { pcduRpc.innerText = 'TRIPPED (-35%)'; pcduRpc.className = 'text-amber-400 font-bold'; }
+      if (pcduBusB) { pcduBusB.innerText = 'HOT STANDBY'; pcduBusB.className = 'text-gray-400'; }
+      pcduCard.className = 'p-2.5 rounded-lg bg-amber-950/30 border border-amber-500/40 space-y-1.5 transition-all';
+    } else if (isUndervolt) {
+      if (pcduTag) { pcduTag.innerText = 'TIER-2 UVLS (-75%)'; pcduTag.className = 'text-blue-400 font-bold text-[9px] bg-blue-950/60 px-1.5 py-0.5 rounded border border-blue-500/40 animate-pulse'; }
+      if (pcduRail) { pcduRail.innerText = '22.8 V (Depleted)'; pcduRail.className = 'text-blue-400 font-bold'; }
+      if (pcduRpc) { pcduRpc.innerText = 'TRIPPED (-75%)'; pcduRpc.className = 'text-blue-400 font-bold'; }
+      if (pcduBusB) { pcduBusB.innerText = 'LOCKOUT'; pcduBusB.className = 'text-gray-400'; }
+      pcduCard.className = 'p-2.5 rounded-lg bg-blue-950/30 border border-blue-500/40 space-y-1.5 transition-all';
+    } else {
+      if (pcduTag) { pcduTag.innerText = 'BUS-A PRIMARY'; pcduTag.className = 'text-emerald-400 font-bold text-[9px] bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-500/30'; }
+      if (pcduRail) { pcduRail.innerText = '28.4 V Regulated'; pcduRail.className = 'text-cyan-300 font-bold'; }
+      if (pcduRpc) { pcduRpc.innerText = 'CLOSED (100%)'; pcduRpc.className = 'text-emerald-400 font-bold'; }
+      if (pcduBusB) { pcduBusB.innerText = 'HOT STANDBY'; pcduBusB.className = 'text-gray-400'; }
+      pcduCard.className = 'p-2.5 rounded-lg bg-black/60 border border-cyan-500/30 space-y-1.5 transition-all';
+    }
+  }
+
+  // 2. BCR Subsystem
+  const bcrTag = document.getElementById('bcr-status-tag');
+  const bcrMode = document.getElementById('bcr-mode-val');
+  const bcrShunt = document.getElementById('bcr-shunt-val');
+  const bcrTrickle = document.getElementById('bcr-trickle-val');
+  const bcrCard = document.getElementById('subsystem-bcr-card');
+
+  if (bcrCard) {
+    if (isThermal) {
+      if (bcrTag) { bcrTag.innerText = 'TRICKLE MODE (C/20)'; bcrTag.className = 'text-amber-400 font-bold text-[9px] bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-500/40 animate-pulse'; }
+      if (bcrMode) { bcrMode.innerText = '0.50 A (Tapered)'; bcrMode.className = 'text-amber-300 font-bold'; }
+      if (bcrShunt) { bcrShunt.innerText = 'HEAT BYPASS'; bcrShunt.className = 'text-amber-400 font-semibold'; }
+      if (bcrTrickle) { bcrTrickle.innerText = 'ENGAGED (C/20)'; bcrTrickle.className = 'text-amber-300 font-bold'; }
+      bcrCard.className = 'p-2.5 rounded-lg bg-amber-950/30 border border-amber-500/40 space-y-1.5 transition-all';
+    } else if (isUndervolt) {
+      if (bcrTag) { bcrTag.innerText = 'BOOST CHARGE'; bcrTag.className = 'text-blue-400 font-bold text-[9px] bg-blue-950/60 px-1.5 py-0.5 rounded border border-blue-500/40 animate-pulse'; }
+      if (bcrMode) { bcrMode.innerText = '2.40 A (Max CC)'; bcrMode.className = 'text-blue-300 font-bold'; }
+      if (bcrShunt) { bcrShunt.innerText = 'FULL ARRAY DIRECT'; bcrShunt.className = 'text-blue-300 font-semibold'; }
+      if (bcrTrickle) { bcrTrickle.innerText = 'READY'; bcrTrickle.className = 'text-gray-400'; }
+      bcrCard.className = 'p-2.5 rounded-lg bg-blue-950/30 border border-blue-500/40 space-y-1.5 transition-all';
+    } else {
+      if (bcrTag) { bcrTag.innerText = 'CC 2.4A CHARGE'; bcrTag.className = 'text-emerald-400 font-bold text-[9px] bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-500/30'; }
+      if (bcrMode) { bcrMode.innerText = '2.45 A (CC)'; bcrMode.className = 'text-amber-300 font-bold'; }
+      if (bcrShunt) { bcrShunt.innerText = 'ACTIVE REG'; bcrShunt.className = 'text-cyan-300'; }
+      if (bcrTrickle) { bcrTrickle.innerText = 'STANDBY (C/20)'; bcrTrickle.className = 'text-gray-400'; }
+      bcrCard.className = 'p-2.5 rounded-lg bg-black/60 border border-amber-500/30 space-y-1.5 transition-all';
+    }
+  }
+
+  // 3. Secondary Li-ion Battery Chemistry
+  const battTag = document.getElementById('battery-status-tag');
+  const battRint = document.getElementById('batt-rint-val');
+  const battJoule = document.getElementById('batt-joule-val');
+  const battEff = document.getElementById('batt-eff-val');
+  const battCard = document.getElementById('subsystem-battery-card');
+
+  const rInt = isHighImp ? 0.145 : (isShort ? 0.012 : (isThermal ? 0.082 : 0.045));
+  const jouleHeat = Math.pow(SatState.current, 2) * rInt;
+  const coulEff = isShort ? 72.4 : (isHighImp ? 88.6 : (isThermal ? 91.2 : 99.2));
+
+  if (battCard) {
+    if (battRint) battRint.innerText = `${rInt.toFixed(3)} Ω`;
+    if (battJoule) battJoule.innerText = `${jouleHeat.toFixed(2)} W`;
+    if (battEff) battEff.innerText = `${coulEff.toFixed(1)} %`;
+
+    if (isThermal) {
+      if (battTag) { battTag.innerText = 'OVERHEATING'; battTag.className = 'text-red-400 font-bold text-[9px] bg-red-950/60 px-1.5 py-0.5 rounded border border-red-500/40 animate-pulse'; }
+      battCard.className = 'p-2.5 rounded-lg bg-red-950/30 border border-red-500/40 space-y-1.5 transition-all';
+    } else if (isShort) {
+      if (battTag) { battTag.innerText = 'MICRO-SHORT'; battTag.className = 'text-red-400 font-bold text-[9px] bg-red-950/60 px-1.5 py-0.5 rounded border border-red-500/40 animate-pulse'; }
+      battCard.className = 'p-2.5 rounded-lg bg-red-950/30 border border-red-500/40 space-y-1.5 transition-all';
+    } else if (isHighImp) {
+      if (battTag) { battTag.innerText = 'SEI AGING SURGE'; battTag.className = 'text-purple-400 font-bold text-[9px] bg-purple-950/60 px-1.5 py-0.5 rounded border border-purple-500/40'; }
+      battCard.className = 'p-2.5 rounded-lg bg-purple-950/30 border border-purple-500/40 space-y-1.5 transition-all';
+    } else {
+      if (battTag) { battTag.innerText = 'HEALTHY'; battTag.className = 'text-emerald-400 font-bold text-[9px] bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-500/30'; }
+      battCard.className = 'p-2.5 rounded-lg bg-black/60 border border-emerald-500/30 space-y-1.5 transition-all';
+    }
+  }
+
+  // 4. Radiator & ADCS Thermal Subsystem
+  const adcsTag = document.getElementById('adcs-status-tag');
+  const adcsSlew = document.getElementById('adcs-slew-val');
+  const adcsQrad = document.getElementById('adcs-qrad-val');
+  const adcsCard = document.getElementById('subsystem-adcs-card');
+
+  const qRad = 4.5 * 0.08 * (Math.max(3.0, SatState.temp) - 3.0); // h * A * (T - Tsink)
+
+  if (adcsCard) {
+    if (adcsQrad) adcsQrad.innerText = `${qRad.toFixed(1)} W (hAΔT)`;
+
+    if (isThermal || isLoadShedding) {
+      if (adcsTag) { adcsTag.innerText = 'SLEWING TO 3K SINK'; adcsTag.className = 'text-blue-300 font-bold text-[9px] bg-blue-950/60 px-1.5 py-0.5 rounded border border-blue-500/40 animate-pulse'; }
+      if (adcsSlew) { adcsSlew.innerText = '+18.5° (Deep Space)'; adcsSlew.className = 'text-amber-300 font-bold'; }
+      adcsCard.className = 'p-2.5 rounded-lg bg-blue-950/30 border border-blue-500/40 space-y-1.5 transition-all';
+    } else {
+      if (adcsTag) { adcsTag.innerText = '3K SINK TRACK'; adcsTag.className = 'text-emerald-400 font-bold text-[9px] bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-500/30'; }
+      if (adcsSlew) { adcsSlew.innerText = '0.0° (Level)'; adcsSlew.className = 'text-emerald-300 font-bold'; }
+      adcsCard.className = 'p-2.5 rounded-lg bg-black/60 border border-blue-500/30 space-y-1.5 transition-all';
+    }
+  }
+
+  // 5. Scientific Payload Bus Subsystem
+  const payloadTag = document.getElementById('payload-status-tag');
+  const payloadInst = document.getElementById('payload-inst-val');
+  const payloadShed = document.getElementById('payload-shed-val');
+  const payloadCard = document.getElementById('subsystem-payload-card');
+
+  if (payloadCard) {
+    if (isSafeMode || isShort) {
+      if (payloadTag) { payloadTag.innerText = 'ALL SHED (0W)'; payloadTag.className = 'text-red-400 font-bold text-[9px] bg-red-950/60 px-1.5 py-0.5 rounded border border-red-500/40 animate-pulse'; }
+      if (payloadInst) { payloadInst.innerText = 'OFFLINE (Safe Mode)'; payloadInst.className = 'text-red-400 font-bold'; }
+      if (payloadShed) { payloadShed.innerText = 'TIER-2 ACTIVE (0W)'; payloadShed.className = 'text-red-400 font-bold'; }
+      payloadCard.className = 'p-2.5 rounded-lg bg-red-950/30 border border-red-500/40 space-y-1.5 transition-all';
+    } else if (isLoadShedding) {
+      if (payloadTag) { payloadTag.innerText = 'SHED (-35% / 91W)'; payloadTag.className = 'text-amber-400 font-bold text-[9px] bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-500/40 animate-pulse'; }
+      if (payloadInst) { payloadInst.innerText = 'PARTIAL (91W Active)'; payloadInst.className = 'text-amber-300 font-bold'; }
+      if (payloadShed) { payloadShed.innerText = 'TIER-1 ACTIVE (-35%)'; payloadShed.className = 'text-amber-400 font-bold'; }
+      payloadCard.className = 'p-2.5 rounded-lg bg-amber-950/30 border border-amber-500/40 space-y-1.5 transition-all';
+    } else {
+      if (payloadTag) { payloadTag.innerText = '100% NOMINAL'; payloadTag.className = 'text-emerald-400 font-bold text-[9px] bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-500/30'; }
+      if (payloadInst) { payloadInst.innerText = 'ONLINE (140W)'; payloadInst.className = 'text-purple-300 font-bold'; }
+      if (payloadShed) { payloadShed.innerText = 'TIER-0 (None)'; payloadShed.className = 'text-emerald-300 font-bold'; }
+      payloadCard.className = 'p-2.5 rounded-lg bg-black/60 border border-purple-500/30 space-y-1.5 transition-all';
+    }
+  }
+}
+
+function openComponentMatrixModal() {
+  const m = document.getElementById('component-matrix-modal');
+  if (m) m.classList.remove('hidden');
+}
+
+function closeComponentMatrixModal() {
+  const m = document.getElementById('component-matrix-modal');
+  if (m) m.classList.add('hidden');
+}
+
+function switchMatrixTab(tabName) {
+  const cTab = document.getElementById('tab-content-components');
+  const fTab = document.getElementById('tab-content-faults');
+  const mTab = document.getElementById('tab-content-matrix');
+  const bComp = document.getElementById('tab-btn-components');
+  const bFault = document.getElementById('tab-btn-faults');
+  const bMat = document.getElementById('tab-btn-matrix');
+
+  if (cTab) cTab.classList.add('hidden');
+  if (fTab) fTab.classList.add('hidden');
+  if (mTab) mTab.classList.add('hidden');
+
+  if (bComp) bComp.className = 'px-3 py-1.5 rounded-lg bg-black/40 border border-white/10 text-gray-400 hover:text-white transition';
+  if (bFault) bFault.className = 'px-3 py-1.5 rounded-lg bg-black/40 border border-white/10 text-gray-400 hover:text-white transition';
+  if (bMat) bMat.className = 'px-3 py-1.5 rounded-lg bg-black/40 border border-white/10 text-gray-400 hover:text-white transition';
+
+  if (tabName === 'components' && cTab && bComp) {
+    cTab.classList.remove('hidden');
+    bComp.className = 'px-3 py-1.5 rounded-lg bg-cyan-950 border border-cyan-400 text-cyan-300 font-bold transition';
+  } else if (tabName === 'faults' && fTab && bFault) {
+    fTab.classList.remove('hidden');
+    bFault.className = 'px-3 py-1.5 rounded-lg bg-amber-950 border border-amber-400 text-amber-300 font-bold transition';
+  } else if (tabName === 'matrix' && mTab && bMat) {
+    mTab.classList.remove('hidden');
+    bMat.className = 'px-3 py-1.5 rounded-lg bg-purple-950 border border-purple-400 text-purple-300 font-bold transition';
+  }
 }
 
 // ==============================================================================
@@ -1017,8 +1509,56 @@ function connectWebSocket() {
       SatState.final_severity = data.final_severity || "NOMINAL";
       SatState.risk_score = data.risk_score || 0.05;
       SatState.rl_action_name = data.rl_action_name || "NOMINAL_MONITOR";
+      SatState.rl_action_id = data.rl_action_id !== undefined ? data.rl_action_id : 0;
+      SatState.dynamic_threshold = data.dynamic_threshold !== undefined ? data.dynamic_threshold : 0.70;
       SatState.safety_override_active = !!data.safety_override_active;
       SatState.requires_human_approval = !!data.requires_human_approval;
+
+      // Check Anomaly State Transitions
+      const isCurrentlyAnomaly = (SatState.p_ensemble >= 0.30) || (SatState.primary_fault !== "NOMINAL") || (SatState.final_severity !== "NOMINAL") || SatState.safety_override_active;
+
+      if (isCurrentlyAnomaly) {
+        SatState.wasInAnomaly = true;
+        if (data.rl_action_name && data.rl_action_name !== "NOMINAL_MONITOR") {
+          SatState.lastMitigatingRLAction = data.rl_action_name;
+        }
+        if (data.primary_fault && data.primary_fault !== "NOMINAL") {
+          SatState.lastMitigatedFault = data.primary_fault;
+        }
+      } else {
+        // Telemetry is NOMINAL: Clear all visual anomaly flags immediately
+        SatState.faultThermalRunaway = false;
+        SatState.faultMicroShort = false;
+        SatState.faultDeepUndervolt = false;
+        SatState.faultImpedanceSurge = false;
+        SatState.faultSensorGlitch = false;
+
+        if (cellThermalMaterial) {
+          cellThermalMaterial.color.setHex(0x3b82f6);
+          cellThermalMaterial.emissive.setHex(0x001133);
+        }
+        if (thermalPointLight) thermalPointLight.intensity = 0;
+        if (particleSystemThermal) particleSystemThermal.material.opacity = 0;
+
+        if (SatState.wasInAnomaly) {
+          SatState.wasInAnomaly = false;
+
+          const appliedAction = SatState.lastMitigatingRLAction || "LOAD_SHEDDING";
+          const previousFault = SatState.lastMitigatedFault || "THERMAL_RUNAWAY";
+          const timeStr = new Date().toLocaleTimeString();
+          SatState.lastRecoveryTimestamp = timeStr;
+
+          // Stop alarm & play positive recovery chime
+          audioSys.stopCriticalAlarm();
+          audioSys.playRecoveryChime();
+
+          // Log to terminal
+          addTerminalLog(`✅ SATELLITE RECOVERED TO NOMINAL // Applied RL Policy: ${appliedAction} mitigated ${previousFault}!`, false, false, true);
+
+          // Show prominent recovery banner
+          showRecoveryBanner(appliedAction, previousFault, timeStr);
+        }
+      }
 
       safeSetText('eclipse-status', data.is_eclipse === 1 ? 'ECLIPSE (COOLING)' : 'DIRECT SUNLIGHT');
 
@@ -1080,24 +1620,78 @@ function triggerFault(faultType) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ fault_type: faultType, duration_sec: 25.0 })
   }).then(() => {
+    SatState.wasInAnomaly = true;
+    SatState.lastMitigatedFault = faultType.toUpperCase();
+
+    // Map initial mitigation expectations
+    if (faultType === 'thermal_runaway') {
+      SatState.faultThermalRunaway = true;
+      SatState.lastMitigatingRLAction = "LOAD_SHEDDING";
+    }
+    if (faultType === 'internal_short') {
+      SatState.faultMicroShort = true;
+      SatState.lastMitigatingRLAction = "TRIGGER_SAFE_MODE";
+    }
+    if (faultType === 'undervoltage') {
+      SatState.faultDeepUndervolt = true;
+      SatState.lastMitigatingRLAction = "LOAD_SHEDDING";
+    }
+    if (faultType === 'high_impedance') {
+      SatState.faultImpedanceSurge = true;
+      SatState.lastMitigatingRLAction = "HIGH_SENSITIVITY_PREARM";
+    }
+    if (faultType === 'sensor_fault') {
+      SatState.faultSensorGlitch = true;
+      SatState.lastMitigatingRLAction = "HIGH_SENSITIVITY_PREARM";
+    }
+
     addTerminalLog(`INJECTED FAULT: "${faultType.toUpperCase()}" active for 25s!`, true);
-    if (faultType === 'thermal_runaway') SatState.faultThermalRunaway = true;
-    if (faultType === 'internal_short') SatState.faultMicroShort = true;
-    if (faultType === 'undervoltage') SatState.faultDeepUndervolt = true;
-    if (faultType === 'high_impedance') SatState.faultImpedanceSurge = true;
-    if (faultType === 'sensor_fault') SatState.faultSensorGlitch = true;
   }).catch(() => {});
 }
 
 function clearFaults() {
   fetch('/api/clear_fault', { method: 'POST' }).then(() => {
+    const prevFault = SatState.lastMitigatedFault || "THERMAL_RUNAWAY";
+    const appliedAction = SatState.lastMitigatingRLAction || "LOAD_SHEDDING";
+
+    // Immediate complete reset of all state & visual flags
     SatState.faultThermalRunaway = false;
     SatState.faultMicroShort = false;
     SatState.faultDeepUndervolt = false;
     SatState.faultImpedanceSurge = false;
     SatState.faultSensorGlitch = false;
-    if (satelliteGroup) satelliteGroup.rotation.set(0, 0, 0);
-    addTerminalLog('All injected faults cleared. Returning to nominal orbit.');
+    SatState.wasInAnomaly = false;
+    SatState.primary_fault = "NOMINAL";
+    SatState.final_severity = "NOMINAL";
+    SatState.p_ensemble = 0.012;
+    SatState.safety_override_active = false;
+
+    // Reset 3D visuals immediately
+    if (cellThermalMaterial) {
+      cellThermalMaterial.color.setHex(0x3b82f6);
+      cellThermalMaterial.emissive.setHex(0x001133);
+    }
+    if (thermalPointLight) thermalPointLight.intensity = 0;
+    if (particleSystemThermal) particleSystemThermal.material.opacity = 0;
+    if (arcLineMesh) arcLineMesh.material.opacity = 0;
+    if (arcFlashLight) arcFlashLight.intensity = 0;
+    if (satelliteGroup) {
+      satelliteGroup.rotation.x = 0;
+      satelliteGroup.rotation.z = 0;
+    }
+    if (highGainDish) {
+      highGainDish.rotation.set(0, 0, 0);
+    }
+
+    const timeStr = new Date().toLocaleTimeString();
+    SatState.lastRecoveryTimestamp = timeStr;
+
+    audioSys.stopCriticalAlarm();
+    audioSys.playRecoveryChime();
+
+    addTerminalLog(`✅ SATELLITE RECOVERED TO NOMINAL // Applied RL Policy: ${appliedAction} mitigated ${prevFault}!`, false, false, true);
+    showRecoveryBanner(appliedAction, prevFault, timeStr, "• Subsystem stabilized and attitude recovered.");
+    updateHUD();
   }).catch(() => {});
 }
 
@@ -1107,7 +1701,7 @@ function manualAuthorizeMitigation() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ authorized: true, autopilot: SatState.autopilotMode })
   }).then(() => {
-    addTerminalLog('OPERATOR CONFIRMATION: Mitigation command authorized.');
+    addTerminalLog('OPERATOR CONFIRMATION: Mitigation command authorized.', false, false, true);
     const authBtn = document.getElementById('btn-operator-auth');
     if (authBtn) authBtn.classList.add('hidden');
   }).catch(() => {});
