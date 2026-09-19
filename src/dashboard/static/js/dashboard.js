@@ -1612,8 +1612,21 @@ function connectWebSocket() {
 }
 
 // ==============================================================================
-// 8. Event Listeners & Fault Injection API
+// 8. Event Listeners, Operator Action Logger & Fault Injection API
 // ==============================================================================
+function sendOperatorAction(action, details = '', metadata = {}) {
+  fetch('/api/logs/action', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: action,
+      details: details,
+      operator: 'MissionCommander',
+      metadata: metadata
+    })
+  }).catch(() => {});
+}
+
 function triggerFault(faultType) {
   fetch('/api/inject_fault', {
     method: 'POST',
@@ -1646,6 +1659,8 @@ function triggerFault(faultType) {
     }
 
     addTerminalLog(`INJECTED FAULT: "${faultType.toUpperCase()}" active for 25s!`, true);
+    sendOperatorAction(`INJECT_FAULT_${faultType.toUpperCase()}`, `Duration: 25s`, { fault_type: faultType });
+    if (AuditLogState.isModalOpen) fetchAndRenderAuditLogs();
   }).catch(() => {});
 }
 
@@ -1692,6 +1707,9 @@ function clearFaults() {
     addTerminalLog(`✅ SATELLITE RECOVERED TO NOMINAL // Applied RL Policy: ${appliedAction} mitigated ${prevFault}!`, false, false, true);
     showRecoveryBanner(appliedAction, prevFault, timeStr, "• Subsystem stabilized and attitude recovered.");
     updateHUD();
+
+    sendOperatorAction('CLEAR_ALL_FAULTS', `Mitigated fault ${prevFault} via ${appliedAction}`);
+    if (AuditLogState.isModalOpen) fetchAndRenderAuditLogs();
   }).catch(() => {});
 }
 
@@ -1704,6 +1722,8 @@ function manualAuthorizeMitigation() {
     addTerminalLog('OPERATOR CONFIRMATION: Mitigation command authorized.', false, false, true);
     const authBtn = document.getElementById('btn-operator-auth');
     if (authBtn) authBtn.classList.add('hidden');
+    sendOperatorAction('AUTHORIZE_MITIGATION_MANUAL_GATE', 'Command approved for execution');
+    if (AuditLogState.isModalOpen) fetchAndRenderAuditLogs();
   }).catch(() => {});
 }
 
@@ -1715,6 +1735,7 @@ function setupEventListeners() {
       safeSetText('audio-icon', muted ? '🔇' : '🔊');
       safeSetText('audio-status', muted ? 'AUDIO OFF' : 'AUDIO ON');
       addTerminalLog(`Audio sound FX ${muted ? 'muted' : 'enabled'}.`);
+      sendOperatorAction('TOGGLE_AUDIO', `Sound FX set to ${muted ? 'MUTED' : 'ENABLED'}`);
     });
   }
 
@@ -1729,6 +1750,7 @@ function setupEventListeners() {
         body: JSON.stringify({ authorized: false, autopilot: SatState.autopilotMode })
       }).catch(() => {});
       addTerminalLog(`Mitigation mode: ${SatState.autopilotMode ? 'Autonomous Auto-Pilot' : 'Manual Operator Gate'}.`);
+      sendOperatorAction('TOGGLE_AUTOPILOT_MODE', `Mode switched to ${SatState.autopilotMode ? 'Autonomous Auto-Pilot' : 'Manual Operator Gate'}`);
     });
   }
 
@@ -1753,16 +1775,19 @@ function setupEventListeners() {
       if (controls) controls.target.set(0, 0, 0);
       if (camera) camera.position.set(16, 9, 22);
       addTerminalLog('Camera: Orbit view perspective.');
+      sendOperatorAction('CHANGE_CAMERA_VIEW', 'Orbit view active');
     } else if (mode === 'thermal' && btnTherm) {
       btnTherm.className = 'py-0.5 px-2 rounded bg-red-950/70 border border-red-400 text-red-200 text-[10px] font-mono-telemetry font-bold';
       if (controls) controls.target.set(0, 0.4, 2.0);
       if (camera) camera.position.set(4, 3, 7);
       addTerminalLog('Camera: IR Thermal mode.');
+      sendOperatorAction('CHANGE_CAMERA_VIEW', 'IR Thermal mode active');
     } else if (mode === 'battery' && btnBatt) {
       btnBatt.className = 'py-0.5 px-2 rounded bg-cyan-950/70 border border-cyan-400 text-cyan-200 text-[10px] font-mono-telemetry font-bold';
       if (controls) controls.target.set(0, 0.3, 2.2);
       if (camera) camera.position.set(0.2, 0.8, 4.6);
       addTerminalLog('Camera: Battery module close-up.');
+      sendOperatorAction('CHANGE_CAMERA_VIEW', 'Battery module close-up active');
     }
   }
 
@@ -1785,7 +1810,328 @@ function onWindowResize() {
 }
 
 // ==============================================================================
-// 9. Main Render Loop & Initialization
+// 9. Mission Audit Ledger & 10,000-Line FIFO Buffer Management & PDF Export
+// ==============================================================================
+const AuditLogState = {
+  isModalOpen: false,
+  isPaused: false,
+  currentCategory: 'ALL',
+  searchQuery: '',
+  pollTimer: null,
+  logs: [],
+  stats: {},
+  expandedSeqIds: new Set()
+};
+
+function openAuditLogModal() {
+  const modal = document.getElementById('audit-logs-modal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  AuditLogState.isModalOpen = true;
+  fetchAndRenderAuditLogs();
+
+  if (AuditLogState.pollTimer) clearInterval(AuditLogState.pollTimer);
+  AuditLogState.pollTimer = setInterval(() => {
+    if (AuditLogState.isModalOpen && !AuditLogState.isPaused) {
+      fetchAndRenderAuditLogs(false);
+    }
+  }, 1500);
+
+  sendOperatorAction('OPEN_MISSION_AUDIT_CONSOLE', 'Opened 10k FIFO Mission Audit Ledger');
+}
+
+function closeAuditLogModal() {
+  const modal = document.getElementById('audit-logs-modal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  AuditLogState.isModalOpen = false;
+  if (AuditLogState.pollTimer) {
+    clearInterval(AuditLogState.pollTimer);
+    AuditLogState.pollTimer = null;
+  }
+}
+
+function setAuditCategoryFilter(cat) {
+  AuditLogState.currentCategory = cat;
+  const categories = ['all', 'action', 'predict', 'fault', 'mitigation', 'recovery', 'telemetry'];
+  categories.forEach(c => {
+    const btn = document.getElementById(`filter-btn-${c}`);
+    if (btn) {
+      btn.className = 'px-2.5 py-1 rounded-md bg-black/50 border border-white/10 text-gray-400 hover:text-white transition';
+    }
+  });
+
+  const activeBtnId = cat === 'ALL' ? 'filter-btn-all' :
+    cat === 'OPERATOR_ACTION' ? 'filter-btn-action' :
+    cat === 'EARLY_PREDICTION' ? 'filter-btn-predict' :
+    cat === 'FAULT_ANOMALY' ? 'filter-btn-fault' :
+    cat === 'RL_MITIGATION' ? 'filter-btn-mitigation' :
+    cat === 'RECOVERY_EVENT' ? 'filter-btn-recovery' : 'filter-btn-telemetry';
+
+  const activeBtn = document.getElementById(activeBtnId);
+  if (activeBtn) {
+    activeBtn.className = 'px-2.5 py-1 rounded-md bg-cyan-950 border border-cyan-400 text-cyan-300 font-bold transition';
+  }
+
+  fetchAndRenderAuditLogs();
+}
+
+function filterAuditLogs() {
+  const input = document.getElementById('audit-search-input');
+  const clearBtn = document.getElementById('btn-clear-search');
+  AuditLogState.searchQuery = input ? input.value.trim() : '';
+  if (clearBtn) {
+    if (AuditLogState.searchQuery) clearBtn.classList.remove('hidden');
+    else clearBtn.classList.add('hidden');
+  }
+  fetchAndRenderAuditLogs();
+}
+
+function clearAuditSearch() {
+  const input = document.getElementById('audit-search-input');
+  if (input) input.value = '';
+  filterAuditLogs();
+}
+
+function toggleAuditStreamPause() {
+  AuditLogState.isPaused = !AuditLogState.isPaused;
+  safeSetText('pause-log-icon', AuditLogState.isPaused ? '▶️' : '⏸️');
+  safeSetText('pause-log-text', AuditLogState.isPaused ? 'RESUME STREAM' : 'PAUSE STREAM');
+  const btn = document.getElementById('btn-pause-log-stream');
+  if (btn) {
+    btn.className = AuditLogState.isPaused ?
+      'px-2.5 py-1 rounded-lg bg-amber-950/60 border border-amber-400 text-amber-300 text-[11px] transition flex items-center space-x-1' :
+      'px-2.5 py-1 rounded-lg bg-black/50 border border-cyan-500/30 hover:border-cyan-400 text-cyan-300 text-[11px] transition flex items-center space-x-1';
+  }
+}
+
+function refreshAuditLogs() {
+  fetchAndRenderAuditLogs();
+}
+
+function clearAuditBuffer() {
+  if (confirm("Are you sure you want to clear the 10,000-line Mission Audit Log buffer? This resets the ledger on disk.")) {
+    fetch('/api/logs/clear', { method: 'POST' }).then(() => {
+      addTerminalLog('Mission Audit buffer cleared.', false, false, true);
+      fetchAndRenderAuditLogs();
+    }).catch(() => {});
+  }
+}
+
+function toggleLogDetails(seqId) {
+  if (AuditLogState.expandedSeqIds.has(seqId)) {
+    AuditLogState.expandedSeqIds.delete(seqId);
+  } else {
+    AuditLogState.expandedSeqIds.add(seqId);
+  }
+  renderAuditTableRows(AuditLogState.logs);
+}
+
+function fetchAndRenderAuditLogs(showLoading = false) {
+  let url = `/api/logs/all?limit=300`;
+  if (AuditLogState.currentCategory && AuditLogState.currentCategory !== 'ALL') {
+    url += `&category=${encodeURIComponent(AuditLogState.currentCategory)}`;
+  }
+  if (AuditLogState.searchQuery) {
+    url += `&search=${encodeURIComponent(AuditLogState.searchQuery)}`;
+  }
+
+  fetch(url)
+    .then(res => res.json())
+    .then(data => {
+      AuditLogState.logs = data.logs || [];
+      AuditLogState.stats = data.stats || {};
+      
+      // Update HUD & Modal KPI counters
+      const bCount = AuditLogState.stats.buffer_count || AuditLogState.logs.length;
+      const bMax = AuditLogState.stats.buffer_max_lines || 10000;
+      const bPct = AuditLogState.stats.buffer_usage_pct || 0.0;
+      
+      safeSetText('header-log-count', `${bCount} / 10k`);
+      safeSetText('audit-capacity-pill', `${bCount} / ${bMax} LINES (${bPct}%)`);
+      safeSetText('kpi-total-logs', `${AuditLogState.stats.total_events_logged || bCount}`);
+      safeSetText('kpi-operator-actions', `${AuditLogState.stats.operator_actions || 0}`);
+      safeSetText('kpi-early-preds', `${AuditLogState.stats.early_predictions || 0}`);
+      safeSetText('kpi-faults', `${AuditLogState.stats.faults_detected || 0}`);
+      safeSetText('kpi-mitigations', `${AuditLogState.stats.mitigations_executed || 0}`);
+      safeSetText('kpi-recoveries', `${AuditLogState.stats.recoveries || 0}`);
+      safeSetText('audit-showing-count', `Showing ${AuditLogState.logs.length} of ${bCount} stored in FIFO buffer`);
+
+      renderAuditTableRows(AuditLogState.logs);
+    })
+    .catch(err => {
+      console.warn("Error fetching audit logs:", err);
+    });
+}
+
+function renderAuditTableRows(logs) {
+  const tbody = document.getElementById('audit-log-tbody');
+  if (!tbody) return;
+
+  if (!logs || logs.length === 0) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="8" class="p-8 text-center text-gray-500 font-mono-telemetry">
+          No structured log events match the current filter criteria.
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  let html = '';
+  logs.forEach(item => {
+    const seq = item.seq_id || 0;
+    const met = item.met || "T+00:00:00";
+    const lvl = item.level || "INFO";
+    const cat = item.event_type || "SYSTEM";
+    const sub = item.subsystem || "EPS_CORE";
+    const msg = item.message || "";
+    const telem = item.telemetry || {};
+    const models = item.models || {};
+    const meta = item.metadata || {};
+    const isExpanded = AuditLogState.expandedSeqIds.has(seq);
+
+    // Color Badges
+    let lvlBadge = 'bg-gray-800 text-gray-300 border-gray-600';
+    if (lvl === 'CRITICAL' || lvl === 'EMERGENCY') lvlBadge = 'bg-red-950/80 text-red-300 border-red-500 animate-pulse';
+    else if (lvl === 'FAULT' || lvl === 'WARNING') lvlBadge = 'bg-amber-950/80 text-amber-300 border-amber-500';
+    else if (lvl === 'ACTION') lvlBadge = 'bg-cyan-950/80 text-cyan-300 border-cyan-400 font-bold';
+    else if (lvl === 'PREDICT') lvlBadge = 'bg-orange-950/80 text-orange-300 border-orange-400 font-bold';
+    else if (lvl === 'RL-POLICY') lvlBadge = 'bg-emerald-950/80 text-emerald-300 border-emerald-400 font-bold';
+    else if (lvl === 'RECOVER') lvlBadge = 'bg-purple-950/80 text-purple-300 border-purple-400 font-bold';
+    else if (lvl === 'SAFETY') lvlBadge = 'bg-red-950/60 text-red-200 border-red-400 font-bold';
+
+    // Subsystem Badge
+    let subBadge = 'text-gray-400';
+    if (sub.includes('PCDU')) subBadge = 'text-cyan-300 font-bold';
+    else if (sub.includes('BCR')) subBadge = 'text-amber-300 font-bold';
+    else if (sub.includes('BATTERY')) subBadge = 'text-emerald-300 font-bold';
+    else if (sub.includes('OPERATOR')) subBadge = 'text-cyan-400 font-bold';
+    else if (sub.includes('AI')) subBadge = 'text-purple-300 font-bold';
+    else if (sub.includes('PREDICT')) subBadge = 'text-orange-300 font-bold';
+
+    // Telemetry Snapshot String
+    const telemPills = [];
+    if (telem.voltage !== undefined) telemPills.push(`<span class="text-cyan-300">${telem.voltage.toFixed(2)}V</span>`);
+    if (telem.current !== undefined) telemPills.push(`<span class="text-amber-300">${telem.current.toFixed(2)}A</span>`);
+    if (telem.temperature !== undefined) telemPills.push(`<span class="text-purple-300">${telem.temperature.toFixed(1)}°C</span>`);
+    if (telem.soc !== undefined) {
+      const socVal = telem.soc <= 1.0 ? telem.soc * 100 : telem.soc;
+      telemPills.push(`<span class="text-emerald-300">${socVal.toFixed(0)}%</span>`);
+    }
+    if (models.p_ensemble !== undefined) telemPills.push(`<span class="text-red-300">P_ens:${models.p_ensemble.toFixed(2)}</span>`);
+    const telemStr = telemPills.length > 0 ? telemPills.join(' • ') : '<span class="text-gray-600">N/A</span>';
+
+    html += `
+      <tr class="hover:bg-white/5 cursor-pointer transition ${isExpanded ? 'bg-cyan-950/20' : ''}" onclick="toggleLogDetails(${seq})">
+        <td class="p-2.5 font-bold text-gray-400">#${seq}</td>
+        <td class="p-2.5 text-cyan-300">${met}</td>
+        <td class="p-2.5 text-center">
+          <span class="px-2 py-0.5 text-[9px] font-bold rounded border ${lvlBadge}">
+            ${lvl}
+          </span>
+        </td>
+        <td class="p-2.5 font-semibold text-gray-200">${cat}</td>
+        <td class="p-2.5 ${subBadge}">${sub}</td>
+        <td class="p-2.5 text-[10px]">${telemStr}</td>
+        <td class="p-2.5 text-gray-200 leading-snug">${msg}</td>
+        <td class="p-2.5 text-center text-cyan-400 font-bold">
+          ${isExpanded ? '▲' : '▼'}
+        </td>
+      </tr>
+    `;
+
+    if (isExpanded) {
+      html += `
+        <tr class="bg-black/80 border-b border-cyan-500/30">
+          <td colspan="8" class="p-3.5 space-y-2">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-[10px]">
+              
+              <!-- Telemetry Detailed Metrics -->
+              <div class="p-2.5 rounded-lg bg-black/60 border border-cyan-500/30 space-y-1">
+                <div class="text-cyan-300 font-bold uppercase pb-1 border-b border-white/10">Full Telemetry Snapshot</div>
+                <div class="space-y-0.5 text-gray-300">
+                  <div>• Voltage: <strong class="text-white">${telem.voltage !== undefined ? telem.voltage.toFixed(3) : 'N/A'} V</strong></div>
+                  <div>• Current: <strong class="text-white">${telem.current !== undefined ? telem.current.toFixed(3) : 'N/A'} A</strong></div>
+                  <div>• Temperature: <strong class="text-white">${telem.temperature !== undefined ? telem.temperature.toFixed(2) : 'N/A'} °C</strong></div>
+                  <div>• State of Charge (SOC): <strong class="text-white">${telem.soc !== undefined ? (telem.soc * 100).toFixed(1) : 'N/A'} %</strong></div>
+                  <div>• Power: <strong class="text-white">${telem.power_watts !== undefined ? telem.power_watts.toFixed(2) : 'N/A'} W</strong></div>
+                  <div>• Impedance Proxy: <strong class="text-white">${telem.impedance_proxy !== undefined ? telem.impedance_proxy.toFixed(4) : 'N/A'} Ω</strong></div>
+                </div>
+              </div>
+
+              <!-- Multi-Model Consensus & Thresholds -->
+              <div class="p-2.5 rounded-lg bg-black/60 border border-amber-500/30 space-y-1">
+                <div class="text-amber-300 font-bold uppercase pb-1 border-b border-white/10">AI & Ensemble Consensus</div>
+                <div class="space-y-0.5 text-gray-300">
+                  <div>• P(Ensemble): <strong class="text-white">${models.p_ensemble !== undefined ? models.p_ensemble.toFixed(3) : 'N/A'}</strong></div>
+                  <div>• Random Forest (35%): <strong class="text-white">${models.p_rf !== undefined ? models.p_rf.toFixed(3) : 'N/A'}</strong></div>
+                  <div>• XGBoost (40%): <strong class="text-white">${models.p_xgboost !== undefined ? models.p_xgboost.toFixed(3) : 'N/A'}</strong></div>
+                  <div>• Extra Trees (25%): <strong class="text-white">${models.p_extra_trees !== undefined ? models.p_extra_trees.toFixed(3) : 'N/A'}</strong></div>
+                  <div>• Dynamic Threshold (Tau): <strong class="text-white">${models.dynamic_threshold !== undefined ? models.dynamic_threshold.toFixed(2) : '0.70'}</strong></div>
+                </div>
+              </div>
+
+              <!-- Metadata & ISO Timestamps -->
+              <div class="p-2.5 rounded-lg bg-black/60 border border-purple-500/30 space-y-1">
+                <div class="text-purple-300 font-bold uppercase pb-1 border-b border-white/10">Event Metadata & Flight Standards</div>
+                <div class="space-y-0.5 text-gray-300">
+                  <div>• ISO Timestamp: <strong class="text-white">${item.timestamp || 'N/A'}</strong></div>
+                  <div>• UNIX Timestamp: <strong class="text-white">${item.unix_ts || 'N/A'}</strong></div>
+                  <div>• Standard Compliance: <strong class="text-emerald-300">NASA-HDBK-4008 / ECSS</strong></div>
+                  <div>• Metadata Payload: <strong class="text-gray-300">${JSON.stringify(meta)}</strong></div>
+                </div>
+              </div>
+
+            </div>
+          </td>
+        </tr>
+      `;
+    }
+  });
+
+  tbody.innerHTML = html;
+}
+
+function exportAuditPDF() {
+  const exportBtn = document.getElementById('btn-export-pdf');
+  const icon = document.getElementById('export-pdf-icon');
+  const text = document.getElementById('export-pdf-text');
+
+  if (icon) icon.innerText = '⏳';
+  if (text) text.innerText = 'GENERATING PDF...';
+  if (exportBtn) exportBtn.disabled = true;
+
+  fetch('/api/logs/export_pdf')
+    .then(response => {
+      if (!response.ok) throw new Error("Failed to generate PDF");
+      return response.blob();
+    })
+    .then(blob => {
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = `AERO_GUARD_MISSION_AUDIT_${Date.now()}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      audioSys.playRecoveryChime();
+      addTerminalLog('Mission Audit PDF report generated and downloaded.', false, false, true);
+    })
+    .catch(err => {
+      alert("Error generating PDF: " + err.message);
+    })
+    .finally(() => {
+      if (icon) icon.innerText = '📥';
+      if (text) text.innerText = 'EXPORT AUDIT PDF';
+      if (exportBtn) exportBtn.disabled = false;
+    });
+}
+
+// ==============================================================================
+// 10. Main Render Loop & Initialization
 // ==============================================================================
 function animateLoop(now) {
   requestAnimationFrame(animateLoop);
@@ -1814,6 +2160,8 @@ window.onload = function() {
   buildDetailedSatellite();
   setupEventListeners();
   connectWebSocket();
+  fetchAndRenderAuditLogs(false);
   addTerminalLog('AERO-GUARD Mission Control Dashboard online. Telemetry sync active.');
   animateLoop(performance.now());
 };
+

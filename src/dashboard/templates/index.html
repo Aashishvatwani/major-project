@@ -67,6 +67,11 @@
         </div>
 
         <div class="flex items-center space-x-2">
+          <button id="btn-open-audit-logs" onclick="openAuditLogModal()" class="px-2.5 py-1.5 rounded-lg border border-amber-500/60 hover:border-amber-400 bg-amber-950/70 hover:bg-amber-900/90 text-xs font-orbitron font-semibold text-amber-300 transition flex items-center space-x-1.5 shadow-[0_0_12px_rgba(245,158,11,0.3)]">
+            <span>📋</span>
+            <span class="font-bold">MISSION AUDIT LOGS</span>
+            <span id="header-log-count" class="ml-1 px-1.5 py-0.2 bg-amber-500/20 text-amber-200 rounded text-[10px] font-mono-telemetry border border-amber-400/40">0 / 10k</span>
+          </button>
           <a href="/research" class="px-2.5 py-1.5 rounded-lg border border-cyan-400/60 hover:border-cyan-300 bg-cyan-950/80 hover:bg-cyan-900 text-xs font-orbitron font-semibold text-cyan-300 transition flex items-center space-x-1.5 shadow-[0_0_12px_rgba(56,189,248,0.3)]">
             <span>📄</span>
             <span>R&D PAPER</span>
@@ -746,14 +751,21 @@
     </main>
 
     <!-- Bottom Aerospace Event Console Bar -->
-    <footer class="glass-panel rounded-xl px-4 py-2 border border-cyan-500/25 flex items-center justify-between text-[11px] font-mono-telemetry">
+    <footer class="glass-panel rounded-xl px-4 py-2 border border-cyan-500/25 flex items-center justify-between text-[11px] font-mono-telemetry cursor-pointer hover:border-amber-500/50 transition" onclick="openAuditLogModal()">
       <div class="flex items-center space-x-3 overflow-hidden">
-        <span class="text-cyan-400 font-bold uppercase shrink-0">LOG BUS:</span>
+        <span class="text-amber-400 font-bold uppercase shrink-0 flex items-center space-x-1">
+          <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+          <span>LIVE AUDIT LOG:</span>
+        </span>
         <div id="terminal-ticker" class="truncate text-gray-300">
           [00:00:01] AERO-GUARD HITL online. Digital Twin synchronized with PySerial hardware bridge.
         </div>
       </div>
       <div class="shrink-0 flex items-center space-x-3 text-[10px] font-mono-telemetry text-gray-400 pl-4 border-l border-cyan-500/20">
+        <button class="px-2 py-0.5 rounded bg-amber-950/60 border border-amber-500/40 text-amber-300 font-bold hover:bg-amber-900 transition flex items-center space-x-1" onclick="event.stopPropagation(); openAuditLogModal();">
+          <span>📋</span>
+          <span>OPEN 10K AUDIT CONSOLE</span>
+        </button>
         <span id="fps-counter" class="text-cyan-400">60 FPS</span>
         <span>THREE.JS PBR</span>
       </div>
@@ -1163,6 +1175,158 @@
           </a>
           <button onclick="closeComponentMatrixModal()" class="px-3.5 py-1 rounded bg-white/10 hover:bg-white/20 text-gray-200 text-xs transition">
             Close
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============================================================================== -->
+  <!-- 📋 INTERACTIVE MISSION AUDIT LOG & 10,000-LINE FIFO BUFFER CONSOLE MODAL -->
+  <!-- ============================================================================== -->
+  <div id="audit-logs-modal" class="hidden fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 md:p-6 overflow-hidden">
+    <div class="glass-panel w-full max-w-7xl rounded-2xl border border-amber-500/40 bg-[#070d1a]/95 shadow-[0_0_60px_rgba(245,158,11,0.25)] flex flex-col h-[92vh] overflow-hidden text-gray-200">
+      
+      <!-- Modal Header -->
+      <div class="px-5 py-3.5 border-b border-amber-500/30 flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-amber-950/40 via-cyan-950/30 to-black/60">
+        <div class="flex items-center space-x-3">
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 via-orange-600 to-cyan-500 flex items-center justify-center text-xl font-bold shadow-lg shadow-amber-500/20">
+            📋
+          </div>
+          <div>
+            <div class="flex items-center space-x-2">
+              <h2 class="text-base sm:text-lg font-orbitron font-bold text-amber-300 uppercase tracking-wider">
+                AERO-GUARD Mission Audit Ledger & 10k-Line FIFO Buffer
+              </h2>
+              <span id="audit-capacity-pill" class="px-2 py-0.5 text-[10px] font-mono-telemetry font-bold rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                0 / 10,000 LINES (0.0%)
+              </span>
+            </div>
+            <p class="text-xs font-mono-telemetry text-gray-400">
+              NASA-HDBK-4008 / ESA ECSS Structured Audit Ledger • Frontend Actions • Precursor Predictions • RL Mitigations • Subsystem States
+            </p>
+          </div>
+        </div>
+        
+        <div class="flex items-center space-x-2">
+          <button id="btn-export-pdf" onclick="exportAuditPDF()" class="px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-xs font-orbitron font-bold tracking-wider flex items-center space-x-1.5 transition shadow-[0_0_15px_rgba(56,189,248,0.35)]">
+            <span id="export-pdf-icon">📥</span>
+            <span id="export-pdf-text">EXPORT AUDIT PDF</span>
+          </button>
+          <button onclick="closeAuditLogModal()" class="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20 text-gray-300 hover:text-white flex items-center justify-center font-bold text-sm transition">
+            ✕
+          </button>
+        </div>
+      </div>
+
+      <!-- Quick KPI Stats Strip -->
+      <div class="px-5 py-2.5 bg-black/60 border-b border-white/10 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2 text-center text-[10px] font-mono-telemetry">
+        <div class="p-1.5 rounded bg-black/40 border border-white/5">
+          <span class="text-gray-400 block text-[9px]">TOTAL LOGGED</span>
+          <span id="kpi-total-logs" class="text-xs font-bold text-white">0</span>
+        </div>
+        <div class="p-1.5 rounded bg-black/40 border border-cyan-500/20">
+          <span class="text-cyan-400 block text-[9px]">OPERATOR ACTIONS</span>
+          <span id="kpi-operator-actions" class="text-xs font-bold text-cyan-300">0</span>
+        </div>
+        <div class="p-1.5 rounded bg-black/40 border border-amber-500/20">
+          <span class="text-amber-400 block text-[9px]">EARLY PREDICTIONS</span>
+          <span id="kpi-early-preds" class="text-xs font-bold text-amber-300">0</span>
+        </div>
+        <div class="p-1.5 rounded bg-black/40 border border-red-500/20">
+          <span class="text-red-400 block text-[9px]">ANOMALIES / FAULTS</span>
+          <span id="kpi-faults" class="text-xs font-bold text-red-400">0</span>
+        </div>
+        <div class="p-1.5 rounded bg-black/40 border border-emerald-500/20">
+          <span class="text-emerald-400 block text-[9px]">RL MITIGATIONS</span>
+          <span id="kpi-mitigations" class="text-xs font-bold text-emerald-300">0</span>
+        </div>
+        <div class="p-1.5 rounded bg-black/40 border border-purple-500/20">
+          <span class="text-purple-400 block text-[9px]">RECOVERIES</span>
+          <span id="kpi-recoveries" class="text-xs font-bold text-purple-300">0</span>
+        </div>
+      </div>
+
+      <!-- Controls & Filtering Bar -->
+      <div class="px-5 py-2.5 bg-black/40 border-b border-white/10 flex flex-wrap items-center justify-between gap-2.5 text-xs font-mono-telemetry">
+        
+        <!-- Search input -->
+        <div class="relative flex-1 min-w-[200px] max-w-md">
+          <input id="audit-search-input" type="text" placeholder="🔍 Search message, subsystem, telemetry, MET..." class="w-full bg-black/60 border border-cyan-500/30 rounded-lg px-3 py-1.5 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-cyan-400 transition" oninput="filterAuditLogs()">
+          <button id="btn-clear-search" onclick="clearAuditSearch()" class="hidden absolute right-2.5 top-1.5 text-gray-500 hover:text-white">✕</button>
+        </div>
+
+        <!-- Filter category pills -->
+        <div class="flex items-center space-x-1.5 overflow-x-auto pb-1 max-w-full text-[10px]">
+          <button id="filter-btn-all" onclick="setAuditCategoryFilter('ALL')" class="px-2.5 py-1 rounded-md bg-cyan-950 border border-cyan-400 text-cyan-300 font-bold transition">ALL</button>
+          <button id="filter-btn-action" onclick="setAuditCategoryFilter('OPERATOR_ACTION')" class="px-2.5 py-1 rounded-md bg-black/50 border border-white/10 text-gray-400 hover:text-white transition">🎯 ACTIONS</button>
+          <button id="filter-btn-predict" onclick="setAuditCategoryFilter('EARLY_PREDICTION')" class="px-2.5 py-1 rounded-md bg-black/50 border border-white/10 text-gray-400 hover:text-white transition">🔮 PREDICTIONS</button>
+          <button id="filter-btn-fault" onclick="setAuditCategoryFilter('FAULT_ANOMALY')" class="px-2.5 py-1 rounded-md bg-black/50 border border-white/10 text-gray-400 hover:text-white transition">⚡ FAULTS</button>
+          <button id="filter-btn-mitigation" onclick="setAuditCategoryFilter('RL_MITIGATION')" class="px-2.5 py-1 rounded-md bg-black/50 border border-white/10 text-gray-400 hover:text-white transition">🛡️ RL MITIGATIONS</button>
+          <button id="filter-btn-recovery" onclick="setAuditCategoryFilter('RECOVERY_EVENT')" class="px-2.5 py-1 rounded-md bg-black/50 border border-white/10 text-gray-400 hover:text-white transition">🔄 RECOVERY</button>
+          <button id="filter-btn-telemetry" onclick="setAuditCategoryFilter('TELEMETRY_FRAME')" class="px-2.5 py-1 rounded-md bg-black/50 border border-white/10 text-gray-400 hover:text-white transition">📡 TELEMETRY</button>
+        </div>
+
+        <!-- Utility buttons -->
+        <div class="flex items-center space-x-2">
+          <button id="btn-pause-log-stream" onclick="toggleAuditStreamPause()" class="px-2.5 py-1 rounded-lg bg-black/50 border border-cyan-500/30 hover:border-cyan-400 text-cyan-300 text-[11px] transition flex items-center space-x-1">
+            <span id="pause-log-icon">⏸️</span>
+            <span id="pause-log-text">PAUSE STREAM</span>
+          </button>
+          <button onclick="refreshAuditLogs()" class="px-2.5 py-1 rounded-lg bg-black/50 border border-white/10 hover:border-white/30 text-gray-300 hover:text-white text-[11px] transition flex items-center space-x-1">
+            <span>🔄</span>
+            <span>REFRESH</span>
+          </button>
+          <button onclick="clearAuditBuffer()" class="px-2.5 py-1 rounded-lg bg-red-950/40 border border-red-500/30 hover:bg-red-900/60 text-red-300 text-[11px] transition flex items-center space-x-1">
+            <span>🗑️</span>
+            <span>CLEAR BUFFER</span>
+          </button>
+        </div>
+
+      </div>
+
+      <!-- Scrollable Log Table & Drill-down Container -->
+      <div class="flex-1 overflow-y-auto font-mono-telemetry text-xs p-3 space-y-2" id="audit-log-container">
+        
+        <div class="overflow-x-auto rounded-xl border border-white/10 shadow-lg">
+          <table class="w-full text-left text-[11px] font-mono-telemetry bg-black/70">
+            <thead class="bg-cyan-950/80 text-cyan-300 uppercase border-b border-cyan-500/30 text-[10px] sticky top-0 z-10">
+              <tr>
+                <th class="p-2.5 w-16">SEQ #</th>
+                <th class="p-2.5 w-24">MET TIME</th>
+                <th class="p-2.5 w-24 text-center">LEVEL</th>
+                <th class="p-2.5 w-36">CATEGORY</th>
+                <th class="p-2.5 w-32">SUBSYSTEM</th>
+                <th class="p-2.5 w-56">TELEMETRY SNAPSHOT</th>
+                <th class="p-2.5">STRUCTURED AUDIT MESSAGE & DETAILS</th>
+                <th class="p-2.5 w-16 text-center">INSPECT</th>
+              </tr>
+            </thead>
+            <tbody id="audit-log-tbody" class="divide-y divide-white/5 text-gray-300">
+              <!-- Dynamically populated rows -->
+              <tr>
+                <td colspan="8" class="p-6 text-center text-gray-500 font-mono-telemetry">
+                  Loading structured mission audit logs from 10,000-line buffer...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="px-5 py-2.5 border-t border-white/10 bg-black/70 flex flex-wrap items-center justify-between gap-3 text-xs font-mono-telemetry">
+        <div class="text-gray-400 text-[11px] flex items-center space-x-2">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span>FIFO PRUNING ACTIVE (Capped at 10,000 Lines) • Microsecond Audit Precision</span>
+        </div>
+        <div class="flex items-center space-x-3">
+          <span id="audit-showing-count" class="text-gray-400 text-[11px]">Showing 0 logs</span>
+          <button onclick="exportAuditPDF()" class="px-3 py-1 rounded bg-cyan-950 border border-cyan-400/50 hover:bg-cyan-900 text-cyan-300 font-bold transition flex items-center space-x-1">
+            <span>📥</span>
+            <span>DOWNLOAD AUDIT PDF</span>
           </button>
         </div>
       </div>
